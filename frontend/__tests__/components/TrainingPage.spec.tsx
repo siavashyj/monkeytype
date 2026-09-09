@@ -133,6 +133,16 @@ describe("TrainingSession", () => {
     expect(input.value).toBe("the");
     expect(progress()).toBe(3);
     expect(statValue("accuracy")).toBe("75.0%");
+    const text = promptText();
+    typeText(input, text.slice(3));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      pairs: Record<string, { attempts: number; errors: number }>;
+    };
+    expect(stored.pairs["th"]).toMatchObject({
+      attempts: (text.match(/th/g)?.length ?? 0) + 1,
+      errors: 1,
+    });
   });
 
   it("allows selection replacement and native word deletion", () => {

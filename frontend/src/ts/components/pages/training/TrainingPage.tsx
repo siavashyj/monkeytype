@@ -206,7 +206,10 @@ export function TrainingSession(): JSXElement {
           recordAttempt(session, {
             expected,
             actual: character,
-            previous: continuous ? text()[index - 1] : undefined,
+            previous:
+              index > 0 && next[index - 1] === text()[index - 1]
+                ? text()[index - 1]
+                : undefined,
             latencyMs:
               continuous && lastKey !== null ? now - lastKey : undefined,
           });
