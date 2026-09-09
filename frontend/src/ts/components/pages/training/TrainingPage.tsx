@@ -18,6 +18,7 @@ import {
   recordAttempt,
   type SessionSummary,
 } from "../../../training/engine";
+import { getTextInsertion } from "../../../training/input";
 import { cn } from "../../../utils/cn";
 import { Button } from "../../common/Button";
 import { Fa } from "../../common/Fa";
@@ -48,23 +49,31 @@ export function TrainingSession(): JSXElement {
   const [manual, setManual] = createSignal("");
   const [count, setCount] = createSignal(25);
   const [text, setText] = createSignal("");
-  const [position, setPosition] = createSignal(0);
+  const [typed, setTyped] = createSignal("");
+  const [cursor, setCursor] = createSignal(0);
+  const position = () => Math.min(typed().length, text().length);
+  const correctCharacters = createMemo(
+    () =>
+      typed()
+        .split("")
+        .filter((character, index) => character === text()[index]).length,
+  );
   const [attempts, setAttempts] = createSignal(0);
   const [errors, setErrors] = createSignal(0);
   const [elapsed, setElapsed] = createSignal(0);
   const [running, setRunning] = createSignal(false);
   const [paused, setPaused] = createSignal(false);
-  const [mistake, setMistake] = createSignal(false);
   const [notice, setNotice] = createSignal("");
   const [result, setResult] = createSignal<SessionSummary>();
   const [confirmReset, setConfirmReset] = createSignal(false);
   const [drillTargets, setDrillTargets] = createSignal<string[]>([]);
-  let input: HTMLInputElement | undefined;
+  let input: HTMLTextAreaElement | undefined;
   let session = createProfile();
   let activeSince: number | null = null;
   let activeTime = 0;
   let lastKey: number | null = null;
   let lastCorrect = false;
+  let lastPosition = -1;
   const ranked = createMemo(() => rankTargets(profile()));
   const targets = createMemo(() =>
     mode() === "manual"
@@ -76,7 +85,9 @@ export function TrainingSession(): JSXElement {
   const accuracy = () =>
     attempts() ? (100 * (attempts() - errors())) / attempts() : 100;
   const wpm = () =>
-    elapsed() > 0 ? Math.round(position() / 5 / (elapsed() / 60000)) : 0;
+    elapsed() > 0
+      ? Math.round(correctCharacters() / 5 / (elapsed() / 60000))
+      : 0;
   const currentTime = (): number =>
     activeTime + (activeSince !== null ? performance.now() - activeSince : 0);
   const timer = window.setInterval(() => {
@@ -120,11 +131,11 @@ export function TrainingSession(): JSXElement {
         : generateDrill(vocabulary, chosen, count());
     setText(words.join(" "));
     setDrillTargets(chosen);
-    setPosition(0);
+    setTyped("");
+    setCursor(0);
     setAttempts(0);
     setErrors(0);
     setElapsed(0);
-    setMistake(false);
     setNotice("");
     setResult(undefined);
     session = createProfile();
@@ -134,14 +145,20 @@ export function TrainingSession(): JSXElement {
     lastCorrect = false;
     setPaused(false);
     setRunning(true);
-    input?.focus();
+    if (input !== undefined) {
+      // Reset only for a new drill. Keep native edits/undo untouched while typing.
+      input.value = "";
+      input.setSelectionRange(0, 0);
+      input.focus();
+    }
   };
 
   const finish = (): void => {
+    if (!running() || typed().length < text().length) return;
     const durationMs = Math.max(currentTime(), 1);
     const summary: SessionSummary = {
       date: Date.now(),
-      wpm: Math.round(text().length / 5 / (durationMs / 60000)),
+      wpm: Math.round(correctCharacters() / 5 / (durationMs / 60000)),
       accuracy: accuracy() / 100,
       targets: drillTargets(),
       kind: mode(),
@@ -155,66 +172,74 @@ export function TrainingSession(): JSXElement {
     persist(mergeSession(profile(), session, summary));
   };
 
-  const type = (character: string): void => {
-    if (!running() || paused() || !/^[ -~]$/.test(character)) return;
-    const now = performance.now();
-    activeSince ??= now;
-    const expected = text()[position()] as string;
-    const previous = position() > 0 ? text()[position() - 1] : undefined;
-    const correct = character === expected;
-    recordAttempt(session, {
-      expected,
-      actual: character,
-      previous: lastCorrect ? previous : undefined,
-      latencyMs: lastKey !== null && lastCorrect ? now - lastKey : undefined,
-    });
-    setAttempts((value) => value + 1);
-    if (!correct) setErrors((value) => value + 1);
-    setMistake(!correct);
-    lastKey = now;
-    lastCorrect = correct;
-    if (correct) {
-      setPosition((value) => value + 1);
-      if (position() === text().length) finish();
-    }
-    if (running()) setElapsed(currentTime());
-  };
-
-  const backspace = (): void => {
+  const handleInput = (
+    event: InputEvent & { currentTarget: HTMLTextAreaElement },
+  ): void => {
     if (!running() || paused()) return;
-    setMistake(false);
-    setPosition((value) => Math.max(0, value - 1));
-    lastCorrect = false;
-    lastKey = null;
+    const element = event.currentTarget;
+    const next = element.value;
+    const before = typed();
+    const insertion = getTextInsertion(
+      before,
+      next,
+      element.selectionEnd,
+      event.data,
+    );
+    const isHistory =
+      event.inputType === "historyUndo" || event.inputType === "historyRedo";
+    const isDeletion = event.inputType.startsWith("delete");
+    const now = performance.now();
+    if (next !== before || insertion.text.length) activeSince ??= now;
+    if (!isHistory && !isDeletion) {
+      for (let offset = 0; offset < insertion.text.length; offset++) {
+        const index = insertion.start + offset;
+        const character = insertion.text[offset] as string;
+        const expected = text()[index];
+        const correct = character === expected;
+        const continuous =
+          insertion.text.length === 1 &&
+          insertion.start === before.length &&
+          lastCorrect &&
+          lastPosition === index - 1 &&
+          before[index - 1] === text()[index - 1];
+        if (expected !== undefined) {
+          recordAttempt(session, {
+            expected,
+            actual: character,
+            previous: continuous ? text()[index - 1] : undefined,
+            latencyMs:
+              continuous && lastKey !== null ? now - lastKey : undefined,
+          });
+        }
+        setAttempts((value) => value + 1);
+        if (!correct) setErrors((value) => value + 1);
+        lastKey = now;
+        lastPosition = index;
+        lastCorrect = correct;
+      }
+    }
+    if (isHistory || isDeletion || insertion.text.length !== 1) {
+      lastCorrect = false;
+      lastKey = null;
+    }
+    setTyped(next);
+    setCursor(element.selectionStart);
+    setElapsed(currentTime());
   };
 
   const keydown = (event: KeyboardEvent): void => {
     event.stopPropagation();
-    if (
-      event.isComposing ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey ||
-      event.key === "Tab"
-    ) {
+    if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey) {
       return;
     }
     if (event.key === "Escape") {
       event.preventDefault();
       pause();
-      return;
-    }
-    if (event.repeat) {
+    } else if (event.key === "Enter") {
       event.preventDefault();
-      return;
+      finish();
     }
-    if (event.key === "Backspace") {
-      event.preventDefault();
-      backspace();
-    } else if (/^[ -~]$/.test(event.key)) {
-      event.preventDefault();
-      type(event.key);
-    }
+    // Character input, Backspace, Delete, selection, and shortcuts stay native.
   };
 
   const resume = (): void => {
@@ -414,15 +439,21 @@ export function TrainingSession(): JSXElement {
                     aria-hidden="true"
                     class={cn(
                       "transition-colors",
-                      index() < position() ? "text-text" : "text-sub",
-                      index() === position() && "border-l-2 border-caret",
-                      index() === position() && mistake() && "bg-error text-bg",
+                      typed()[index()] === undefined
+                        ? "text-sub"
+                        : typed()[index()] === letter
+                          ? "text-text"
+                          : "text-error underline",
+                      index() === cursor() && "border-l-2 border-caret",
                     )}
                   >
                     {letter}
                   </span>
                 )}
               </For>
+              <span class="text-error underline">
+                {typed().slice(text().length)}
+              </span>
             </p>
             <label
               for="training-input"
@@ -430,16 +461,16 @@ export function TrainingSession(): JSXElement {
             >
               {paused()
                 ? "Resume when you are ready."
-                : "Type the highlighted character. Correct mistakes to continue."}
+                : "Type the text above. Edit mistakes normally, then press Enter to finish."}
             </label>
-            <input
+            <textarea
               ref={(element) => {
                 input = element;
               }}
               id="training-input"
               aria-describedby="training-prompt training-help"
               aria-label="Typing practice"
-              type="text"
+              rows={3}
               inputMode="text"
               autocomplete="off"
               autoCapitalize="off"
@@ -447,44 +478,33 @@ export function TrainingSession(): JSXElement {
               // oxlint-disable-next-line react/no-unknown-property
               spellcheck={false}
               disabled={paused()}
-              value=""
               placeholder={paused() ? "Paused" : "Type here…"}
               class="w-full rounded bg-sub-alt p-3 text-text focus:outline-2 focus:outline-main"
               onKeyDown={keydown}
               onBlur={pause}
-              onBeforeInput={(event) => {
-                if (event.isComposing) return;
-                if (event.inputType === "deleteContentBackward") {
-                  event.preventDefault();
-                  backspace();
-                } else if (
-                  event.inputType === "insertText" &&
-                  event.data?.length === 1
-                ) {
-                  event.preventDefault();
-                  type(event.data);
-                }
-              }}
-              onInput={(event) => {
-                event.currentTarget.value = "";
-              }}
+              onInput={handleInput}
+              onSelect={(event) =>
+                setCursor(event.currentTarget.selectionStart)
+              }
               onPaste={(event) => {
                 event.preventDefault();
                 setNotice(
                   "Type each character yourself so the drill can measure your progress.",
                 );
               }}
-              onCompositionEnd={(event) => {
-                event.currentTarget.value = "";
-                setNotice("Use direct English keyboard input for this drill.");
-              }}
-            />
+            ></textarea>
             <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
               <p id="training-help" class="text-sm text-sub">
                 Mistakes still count after correction. Esc or leaving the input
                 pauses.
               </p>
-              <div class="flex gap-2">
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  text="finish drill"
+                  active
+                  disabled={typed().length < text().length}
+                  onClick={finish}
+                />
                 <Show when={paused()}>
                   <Button
                     text="resume"

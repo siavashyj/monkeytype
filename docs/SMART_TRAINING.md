@@ -5,11 +5,11 @@ Open **train** in the header or `/training`. The standalone `pnpm dev:training` 
 ## Practice loop
 
 1. Start with the repeatable diagnostic, which includes all English letters.
-2. Type each highlighted character. A wrong character leaves the caret in place and still counts as an error after correction. Backspace revisits the preceding character without awarding duplicate progress.
-3. Complete the drill to save key/pair statistics and a session summary. Interrupted or restarted drills do not change the profile.
+2. Type freely in the text field. The prompt highlights mismatches in red while the text field shows exactly what you typed. Incorrect characters move the caret forward. Backspace deletes what you actually typed; selection, word deletion, and undo use normal browser editing. Corrections never erase historical errors.
+3. After typing the full prompt length, press Enter or choose **finish drill** to save key/pair statistics and a session summary. You can still correct the final character before finishing, or finish with uncorrected mistakes. WPM counts currently correct characters, excluding deleted, extra, and incorrect characters. Interrupted or restarted drills do not change the profile.
 4. Use adaptive practice for suggested targets, or choose up to three letters/pairs. Drills include roughly 70% targeted words and 30% general vocabulary from Monkeytype's English 1k list.
 
-Escape, tabbing away, or hiding the tab pauses. Resume excludes paused time from WPM and resets transition timing. English direct input is supported; paste, composition, and held-key repeats do not contribute synthetic typing results.
+Escape, tabbing away, or hiding the tab pauses. Resume excludes paused time from WPM and resets transition timing. Clipboard paste remains disabled for practice. Native input events support keyboard and touch editing. Deletions and undo/redo update the text without counting as new typing attempts; only continuous single-character input contributes transition timing.
 
 ## Recommendation model
 

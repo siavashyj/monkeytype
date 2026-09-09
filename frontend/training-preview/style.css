@@ -27,7 +27,8 @@
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 button:not(:disabled),
