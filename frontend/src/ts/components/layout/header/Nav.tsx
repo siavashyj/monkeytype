@@ -115,6 +115,17 @@ export function Nav(): JSXElement {
       />
       <Button
         variant="text"
+        fa={{ icon: "fa-bullseye", fixedWidth: true }}
+        router-link
+        href="/training"
+        text="train"
+        class={cn(buttonClass(), "aspect-auto", {
+          "text-main": getActivePage() === "training",
+        })}
+        dataset={{ "data-nav-item": "training" }}
+      />
+      <Button
+        variant="text"
         fa={{
           icon: "fa-info",
           fixedWidth: true,

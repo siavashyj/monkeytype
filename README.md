@@ -1,3 +1,22 @@
+# Monkeytype smart training fork
+
+This fork adds **train → smart training** at `/training` while preserving the normal Monkeytype typing test.
+
+- A repeatable English diagnostic, adaptive drills, and up to three manually selected keys or letter pairs.
+- Accuracy and transition-time recommendations from completed training sessions, with a keyboard focus view and recent history.
+- Device-local progress, pause/resume, and accuracy-first typing: correct the highlighted character to continue; mistakes still count.
+
+For a standalone training app with no Firebase or backend setup, use Node 24 and the pinned pnpm version:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev:training
+```
+
+`pnpm build:training` builds the standalone app to `dist/`. The same training component is integrated into the full app; see the upstream [development setup](docs/CONTRIBUTING_ADVANCED.md) to run that app. Training is English-only and learns from drills completed here; it does not import regular Monkeytype results or synchronize across devices. See [training design and validation](docs/SMART_TRAINING.md).
+
+Original Monkeytype documentation follows. This independent fork retains the upstream GPL-3.0 license.
+
 [![](https://github.com/monkeytypegame/monkeytype/blob/master/frontend/static/images/githubbanner2.png?raw=true)](https://monkeytype.com/)
 <br />
 

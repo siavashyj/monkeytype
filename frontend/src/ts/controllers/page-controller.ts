@@ -48,6 +48,7 @@ type ChangeOptions = {
 const pages = {
   loading: PageLoading.page,
   test: PageTest.page,
+  training: solidPage("training"),
   settings: solidPage("settings", {
     beforeShow: async () => {
       // clear any previous highlight

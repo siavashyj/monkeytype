@@ -1,0 +1,39 @@
+@import "../src/styles/tailwind.css";
+@source "../src/ts/components/pages/training";
+@source "../src/ts/components/common";
+
+@font-face {
+  font-family: "Roboto Mono";
+  src: url("../static/webfonts/RobotoMono-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --bg-color: #323437;
+  --main-color: #e2b714;
+  --caret-color: #e2b714;
+  --sub-color: #a2a4a6;
+  --sub-alt-color: #2c2e31;
+  --text-color: #d1d0c5;
+  --error-color: #ff6b7a;
+  --error-extra-color: #7e2a33;
+  --roundness: 0.5rem;
+  font-family: "Roboto Mono", monospace;
+  background: var(--bg-color);
+  color: var(--text-color);
+}
+
+button,
+input {
+  font: inherit;
+}
+button:not(:disabled),
+a {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+}

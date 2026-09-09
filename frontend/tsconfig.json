@@ -20,6 +20,8 @@
   "include": [
     "./src/**/*.ts",
     "./src/**/*.tsx",
+    "./training-preview/**/*.tsx",
+    "training.vite.config.ts",
     "./scripts/**/*.ts",
     "vite-plugins/**/*.ts",
     "vite.config.ts"

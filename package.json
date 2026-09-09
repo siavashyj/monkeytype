@@ -5,6 +5,8 @@
   "license": "GPL-3.0",
   "type": "module",
   "scripts": {
+    "dev:training": "pnpm --filter @monkeytype/frontend dev:training",
+    "build:training": "pnpm --filter @monkeytype/frontend build:training",
     "preinstall": "npx only-allow pnpm",
     "full-check": "turbo lint build test integration-test lint-styles lint-json check-assets --force",
     "prepare": "husky install",

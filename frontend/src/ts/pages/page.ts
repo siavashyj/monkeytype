@@ -8,6 +8,7 @@ import { ElementWithUtils } from "../utils/dom";
 export type PageName =
   | "loading"
   | "test"
+  | "training"
   | "settings"
   | "about"
   | "account"

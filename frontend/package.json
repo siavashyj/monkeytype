@@ -4,6 +4,8 @@
   "license": "GPL-3.0",
   "type": "module",
   "scripts": {
+    "dev:training": "vite --config training.vite.config.ts",
+    "build:training": "vite build --config training.vite.config.ts",
     "lint": "oxlint . --type-aware --type-check",
     "lint-fast": "oxlint .",
     "lint-styles": "stylelint \"**/*.{scss,css}\"",
