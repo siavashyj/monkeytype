@@ -210,6 +210,11 @@ export function TrainingSession(): JSXElement {
               index > 0 && next[index - 1] === text()[index - 1]
                 ? text()[index - 1]
                 : undefined,
+            previousTwo:
+              index >= 2 &&
+              next.slice(index - 2, index) === text().slice(index - 2, index)
+                ? text().slice(index - 2, index)
+                : undefined,
             latencyMs:
               continuous && lastKey !== null ? now - lastKey : undefined,
           });
@@ -268,11 +273,11 @@ export function TrainingSession(): JSXElement {
     event.preventDefault();
     const target = manual().trim().toLowerCase();
     if (
-      !/^[a-z]{1,2}$/.test(target) ||
+      !/^[a-z]{1,3}$/.test(target) ||
       !vocabulary.some((word) => word.includes(target))
     ) {
       setNotice(
-        "Choose one letter or a two-letter pair found in an English word.",
+        "Choose a key or a 2–3-letter sequence found in an English word.",
       );
       return;
     }
@@ -291,7 +296,7 @@ export function TrainingSession(): JSXElement {
           <h1 class="text-3xl text-text">smart training</h1>
         </div>
         <p class="text-sm text-sub">
-          English · saved on this device · {profile().sessions.length} sessions
+          English · saved in this browser · {profile().sessions.length} sessions
           retained
         </p>
       </div>
@@ -351,7 +356,7 @@ export function TrainingSession(): JSXElement {
               {mode() === "diagnostic"
                 ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
-                  ? "Choose up to three keys or letter pairs below. Your drill mixes focused words with everyday words."
+                  ? "Choose up to three keys or 2–3-letter sequences below. Your drill mixes focused words with everyday words."
                   : targets().length
                     ? `Practice ${targets().join(", ")} with a drill based on your recent accuracy and rhythm.`
                     : "Complete a diagnostic or a mixed drill so we can find useful practice targets."}
@@ -600,15 +605,15 @@ export function TrainingSession(): JSXElement {
               onSubmit={addTarget}
             >
               <label for="training-target" class="text-sm">
-                key or pair
+                key or sequence
               </label>
               <input
                 id="training-target"
                 value={manual()}
-                maxLength={2}
+                maxLength={3}
                 disabled={running()}
                 onInput={(event) => setManual(event.currentTarget.value)}
-                placeholder="th"
+                placeholder="the"
                 class="w-20 rounded bg-sub-alt p-2 text-text"
               />
               <Button text="add target" type="submit" disabled={running()} />
@@ -643,8 +648,8 @@ export function TrainingSession(): JSXElement {
                 </p>
                 <p class="mt-2 text-sm text-sub">
                   Recommendations appear after at least five attempts for a key
-                  or three for a pair. We look for errors first, then slower
-                  transitions.
+                  or three for a 2–3-letter sequence. We look for errors first,
+                  then slower transitions.
                 </p>
               </div>
             }
@@ -663,8 +668,12 @@ export function TrainingSession(): JSXElement {
                         {item.target}
                       </span>
                       <span class="text-sm text-sub">
-                        {item.kind} · {Math.round(item.attempts)} weighted
-                        samples
+                        {item.kind === "key"
+                          ? "key"
+                          : item.kind === "pair"
+                            ? "2-letter"
+                            : "3-letter"}{" "}
+                        · {Math.round(item.attempts)} weighted samples
                       </span>
                     </span>
                     <span class="text-right text-sm">

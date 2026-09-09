@@ -6,20 +6,20 @@ Open **train** in the header or `/training`. The standalone `pnpm dev:training` 
 
 1. Start with the repeatable diagnostic, which includes all English letters.
 2. Type freely in the text field. The prompt highlights mismatches in red while the text field shows exactly what you typed. Incorrect characters move the caret forward. Backspace deletes what you actually typed; selection, word deletion, and undo use normal browser editing. Corrections never erase historical errors.
-3. After typing the full prompt length, press Enter or choose **finish drill** to save key/pair statistics and a session summary. You can still correct the final character before finishing, or finish with uncorrected mistakes. WPM counts currently correct characters, excluding deleted, extra, and incorrect characters. Interrupted or restarted drills do not change the profile.
-4. Use adaptive practice for suggested targets, or choose up to three letters/pairs. Drills include roughly 70% targeted words and 30% general vocabulary from Monkeytype's English 1k list.
+3. After typing the full prompt length, press Enter or choose **finish drill** to save key/pair/triple statistics and a session summary. You can still correct the final character before finishing, or finish with uncorrected mistakes. WPM counts currently correct characters, excluding deleted, extra, and incorrect characters. Interrupted or restarted drills do not change the profile.
+4. Use adaptive practice for suggested targets, or choose up to three keys or 2–3-letter sequences. Drills include roughly 70% targeted words and 30% general vocabulary from Monkeytype's English 1k list.
 
 Escape, tabbing away, or hiding the tab pauses. Resume excludes paused time from WPM and resets transition timing. Clipboard paste remains disabled for practice. Native input events support keyboard and touch editing. Deletions and undo/redo update the text without counting as new typing attempts; only continuous single-character input contributes transition timing.
 
 ## Recommendation model
 
-The deterministic engine uses error rate and mean valid transition latency relative to the user's own profile. Errors contribute 70% of the score and slower transitions 30%. Only correct transitions between adjacent letters contribute timing, and intervals outside 30–2000 ms are excluded. Keys require five weighted attempts, pairs three. Targets with no measured weakness are omitted.
+The deterministic engine uses error rate and mean valid transition latency relative to the user's own profile. Errors contribute 70% of the score and slower transitions 30%. Only correct transitions between adjacent letters contribute timing, and intervals outside 30–2000 ms are excluded. Keys require five weighted attempts; pairs and triples require three, each scored against their own sequence-length baseline. Sequence accuracy measures the final-character attempt given a matching prefix; sequence latency measures the final transition, not the duration of the whole sequence. Targets with no measured weakness are omitted.
 
 Each completed session retains 90% of earlier evidence before adding new observations. Counts shown as weighted samples reflect this recency weighting. The most recent 50 summaries remain available; the repeatable diagnostic enables comparison on the same text, while WPM across different adaptive drills is not directly comparable.
 
-Progress lives in `localStorage` under `monkeytype.smartTraining.v1`. Accuracy values are ratios internally and percentages in the UI. Malformed or incompatible stored profiles fall back safely. Storage failures produce a visible notice and allow in-memory practice. Reset requires an explicit in-app confirmation and affects only this training data.
+Progress lives in `localStorage` under `monkeytype.smartTraining.v1`. Accuracy values are ratios internally and percentages in the UI. Existing version-1 profiles without triple statistics load with an empty triple map while retaining all saved keys, pairs, and history. Malformed or incompatible stored profiles fall back safely. Storage failures produce a visible notice and allow in-memory practice. Reset requires an explicit in-app confirmation and affects only this training data.
 
-Training never writes regular results, account data, or leaderboard scores. Existing typing history is not imported. This feature currently supports English only and does not synchronize between tabs or devices.
+Training never writes regular results, account data, or leaderboard scores. Existing typing history is not imported. This feature currently supports English only. The training profile belongs to the browser’s site storage, not a signed-in user account. Completed drills survive refreshes and browser restarts, but clearing site data removes them; no account backup or cross-device synchronization is implemented.
 
 ## Validation
 

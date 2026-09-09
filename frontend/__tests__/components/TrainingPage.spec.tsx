@@ -86,12 +86,20 @@ describe("TrainingSession", () => {
     expect(statValue("accuracy")).toBe("100.0%");
 
     const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      triples: Record<string, { attempts: number; errors: number }>;
       sessions: Array<{
         kind: string;
         accuracy: number;
         characters: number;
       }>;
     };
+    expect(stored.triples["the"]).toMatchObject({
+      attempts: text.match(/the/g)?.length ?? 0,
+      errors: 0,
+    });
+    expect(
+      Object.keys(stored.triples).every((target) => /^[a-z]{3}$/.test(target)),
+    ).toBe(true);
     expect(stored.sessions).toHaveLength(1);
     expect(stored.sessions[0]).toMatchObject({
       kind: "diagnostic",
@@ -303,18 +311,85 @@ describe("TrainingSession", () => {
     );
   });
 
-  it("rejects unknown manual targets and accepts a known pair", () => {
+  it("preserves legacy saved results while adding triple statistics", () => {
+    const legacy = {
+      version: 1,
+      keys: {
+        z: { attempts: 10, errors: 2, totalLatency: 800, latencySamples: 8 },
+      },
+      pairs: {
+        zz: { attempts: 10, errors: 2, totalLatency: 800, latencySamples: 8 },
+      },
+      sessions: [
+        {
+          date: 1700000000000,
+          kind: "diagnostic",
+          accuracy: 0.9,
+          wpm: 40,
+          targets: [],
+          characters: 100,
+          durationMs: 30000,
+        },
+      ],
+    };
+    localStorage.setItem(storageKey, JSON.stringify(legacy));
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "diagnostic" }));
+    const input = startDiagnostic();
+    typeText(input, promptText());
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      keys: Record<string, { errors: number }>;
+      pairs: Record<string, { attempts: number }>;
+      triples: Record<string, { attempts: number }>;
+      sessions: unknown[];
+    };
+    expect(stored.sessions).toHaveLength(2);
+    expect(stored.sessions[0]).toEqual(legacy.sessions[0]);
+    expect(stored.keys["z"]?.errors).toBeCloseTo(1.8);
+    expect(stored.pairs["zz"]?.attempts).toBe(9);
+    expect(stored.triples["the"]?.attempts).toBeGreaterThan(0);
+    cleanup();
+    renderTraining();
+    expect(screen.getByText(/2 sessions retained/)).toBeInTheDocument();
+  });
+
+  it("retains the original triple error when its final character is corrected", () => {
+    renderTraining();
+    const input = startDiagnostic();
+    const text = promptText();
+    typeText(input, "thx");
+    keyDown(input, "Backspace");
+    typeText(input, text.slice(2));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      triples: Record<string, { attempts: number; errors: number }>;
+      pairs: Record<string, { attempts: number; errors: number }>;
+    };
+    expect(stored.triples["the"]).toMatchObject({
+      attempts: (text.match(/the/g)?.length ?? 0) + 1,
+      errors: 1,
+    });
+    expect(stored.pairs["he"]).toMatchObject({
+      attempts: (text.match(/he/g)?.length ?? 0) + 1,
+      errors: 1,
+    });
+  });
+
+  it("rejects unknown manual targets and accepts pairs and triples", () => {
     renderTraining();
     fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
 
-    const targetInput = screen.getByRole("textbox", { name: "key or pair" });
+    const targetInput = screen.getByRole("textbox", {
+      name: "key or sequence",
+    });
     const start = screen.getByRole("button", { name: "start training" });
     expect(start).toBeDisabled();
 
     fireEvent.input(targetInput, { target: { value: "qx" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Choose one letter or a two-letter pair found in an English word.",
+      "Choose a key or a 2–3-letter sequence found in an English word.",
     );
     expect(start).toBeDisabled();
 
@@ -322,5 +397,39 @@ describe("TrainingSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("button", { name: "th ×" })).toBeInTheDocument();
     expect(start).not.toBeDisabled();
+
+    expect(targetInput).toHaveAttribute("maxlength", "3");
+    fireEvent.input(targetInput, { target: { value: "THE" } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(screen.getByRole("button", { name: "the ×" })).toBeInTheDocument();
+    fireEvent.input(targetInput, { target: { value: "word" } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(
+      screen.queryByRole("button", { name: "word ×" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(start);
+    expect(promptText()).toContain("the");
+  });
+
+  it("recommends a weak three-letter sequence for adaptive practice", () => {
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        keys: {},
+        pairs: {},
+        triples: {
+          the: { attempts: 6, errors: 3, totalLatency: 300, latencySamples: 3 },
+        },
+        sessions: [],
+      }),
+    );
+    renderTraining();
+    expect(
+      screen.getByText(/3-letter · 6 weighted samples/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    expect(promptText()).toContain("the");
   });
 });

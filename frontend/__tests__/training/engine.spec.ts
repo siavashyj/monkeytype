@@ -6,6 +6,7 @@ import {
   parseProfile,
   rankTargets,
   recordAttempt,
+  type Stat,
   type SessionSummary,
 } from "../../src/ts/training/engine";
 
@@ -14,13 +15,18 @@ function repeatAttempt(
   expected: string,
   actual: string,
   count: number,
-  options: { previous?: string; latencyMs?: number } = {},
+  options: {
+    previous?: string;
+    previousTwo?: string;
+    latencyMs?: number;
+  } = {},
 ): void {
   for (let index = 0; index < count; index++) {
     recordAttempt(profile, {
       expected,
       actual,
       previous: options.previous,
+      previousTwo: options.previousTwo,
       latencyMs: options.latencyMs,
     });
   }
@@ -88,6 +94,59 @@ describe("recordAttempt", () => {
       latencySamples: 1,
     });
     expect(profile.pairs["a"]).toBeUndefined();
+  });
+
+  it("records terminal trigram errors and rejects invalid or whitespace context", () => {
+    const profile = createProfile();
+
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "x",
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previousTwo: "bc",
+      latencyMs: 80,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
+      previous: "b",
+      previousTwo: "a ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
+      previous: "a",
+      previousTwo: "bc",
+      latencyMs: 100,
+    });
+
+    expect(profile.triples["abc"]).toEqual({
+      attempts: 2,
+      errors: 1,
+      totalLatency: 100,
+      latencySamples: 1,
+    });
+    expect(profile.triples["bcd"]).toEqual({
+      attempts: 1,
+      errors: 0,
+      totalLatency: 80,
+      latencySamples: 1,
+    });
+    expect(profile.triples["bcc"]).toBeUndefined();
   });
 
   it("accepts only bounded latency samples", () => {
@@ -214,6 +273,64 @@ describe("rankTargets", () => {
     });
     expect(pair?.accuracy).toBeCloseTo(1 / 3);
   });
+
+  it("requires three trigram observations and uses a separate trigram baseline", () => {
+    const profile = createProfile();
+    repeatAttempt(profile, "c", "x", 2, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 120,
+    });
+
+    expect(
+      rankTargets(profile).some(
+        (target) => target.kind === "triple" && target.target === "abc",
+      ),
+    ).toBe(false);
+
+    repeatAttempt(profile, "c", "c", 1, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 120,
+    });
+    repeatAttempt(profile, "d", "d", 3, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 120,
+    });
+    profile.keys = {};
+    profile.pairs = {};
+
+    const triple = rankTargets(profile).find(
+      (target) => target.kind === "triple" && target.target === "abc",
+    );
+    expect(triple).toMatchObject({
+      target: "abc",
+      kind: "triple",
+      attempts: 3,
+      latencyMs: 120,
+    });
+    expect(triple?.accuracy).toBeCloseTo(1 / 3);
+  });
+
+  it("orders equal-score target kinds deterministically", () => {
+    const stat = (attempts: number, latencyMs: number): Stat => ({
+      attempts,
+      errors: 0,
+      totalLatency: attempts * latencyMs,
+      latencySamples: attempts,
+    });
+    const profile = createProfile();
+    profile.keys = { a: stat(5, 100), b: stat(5, 200) };
+    profile.pairs = { ab: stat(5, 100), cd: stat(5, 200) };
+    profile.triples = { abc: stat(5, 100), def: stat(5, 200) };
+
+    expect(rankTargets(profile).map((target) => target.kind)).toEqual([
+      "triple",
+      "pair",
+      "key",
+    ]);
+  });
 });
 
 describe("generateDrill", () => {
@@ -263,6 +380,20 @@ describe("generateDrill", () => {
       "cat",
     ]);
   });
+
+  it("uses three-letter targets to enrich focused word selection", () => {
+    const drill = generateDrill(
+      ["the", "other", "cat", "dog"],
+      ["the"],
+      10,
+      () => 0,
+    );
+
+    expect(drill).toHaveLength(10);
+    expect(
+      drill.filter((word) => word.includes("the")).length,
+    ).toBeGreaterThanOrEqual(7);
+  });
 });
 
 describe("mergeSession", () => {
@@ -284,6 +415,32 @@ describe("mergeSession", () => {
     expect(session.keys["a"]?.attempts).toBe(2);
     expect(merged.sessions).toEqual([summary]);
     expect(merged.sessions[0]).not.toBe(summary);
+  });
+
+  it("decays and merges trigram evidence independently", () => {
+    const profile = createProfile();
+    repeatAttempt(profile, "c", "x", 10, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 100,
+    });
+    const session = createProfile();
+    repeatAttempt(session, "c", "c", 2, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 200,
+    });
+
+    const merged = mergeSession(profile, session, summary);
+
+    expect(merged.triples["abc"]).toEqual({
+      attempts: 11,
+      errors: 9,
+      totalLatency: 400,
+      latencySamples: 2,
+    });
+    expect(profile.triples["abc"]?.attempts).toBe(10);
+    expect(session.triples["abc"]?.attempts).toBe(2);
   });
 
   it("keeps only the latest 50 session summaries", () => {
@@ -327,6 +484,14 @@ describe("parseProfile", () => {
             latencySamples: 99_999,
           },
         },
+        triples: {
+          abc: {
+            attempts: 99_999,
+            errors: 99_999,
+            totalLatency: 99_999_999,
+            latencySamples: 99_999,
+          },
+        },
         sessions,
       }),
     );
@@ -335,20 +500,45 @@ describe("parseProfile", () => {
     expect(parsed.keys["a"]?.errors).toBe(10_000);
     expect(parsed.keys["a"]?.latencySamples).toBe(10_000);
     expect(parsed.keys["a"]?.totalLatency).toBe(20_000_000);
+    expect(parsed.triples["abc"]?.attempts).toBe(10_000);
+    expect(parsed.triples["abc"]?.totalLatency).toBe(20_000_000);
     expect(parsed.sessions).toHaveLength(50);
     expect(parsed.sessions[0]?.date).toBe(5);
     expect(parsed.sessions.at(-1)?.date).toBe(54);
   });
 
+  it("migrates v1 profiles with missing or malformed triple maps", () => {
+    const oldProfile = parseProfile(
+      JSON.stringify({
+        version: 1,
+        keys: {},
+        pairs: {},
+        sessions: [],
+      }),
+    );
+    const malformed = parseProfile(
+      JSON.stringify({ version: 1, triples: [{ attempts: 5 }] }),
+    );
+
+    expect(oldProfile.triples).toEqual({});
+    expect(malformed.triples).toEqual({});
+  });
+
   it("round-trips a profile without sharing mutable arrays", () => {
     const profile = createProfile();
     repeatAttempt(profile, "a", "a", 5, { latencyMs: 100 });
+    repeatAttempt(profile, "c", "c", 3, {
+      previous: "b",
+      previousTwo: "ab",
+      latencyMs: 100,
+    });
     profile.sessions.push(summary);
 
     const parsed = parseProfile(JSON.stringify(profile));
     parsed.sessions[0]?.targets.push("new");
 
     expect(parsed.keys["a"]).toEqual(profile.keys["a"]);
+    expect(parsed.triples["abc"]).toEqual(profile.triples["abc"]);
     expect(profile.sessions[0]?.targets).toEqual(["a", "th"]);
   });
 });

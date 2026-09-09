@@ -2,6 +2,7 @@ export const PROFILE_VERSION = 1 as const;
 
 const MIN_KEY_ATTEMPTS = 5;
 const MIN_PAIR_ATTEMPTS = 3;
+const MIN_TRIPLE_ATTEMPTS = 3;
 const MIN_LATENCY_MS = 30;
 const MAX_LATENCY_MS = 2000;
 const MERGE_DECAY = 0.9;
@@ -34,6 +35,7 @@ export type TrainingProfile = {
   version: typeof PROFILE_VERSION;
   keys: Record<string, Stat>;
   pairs: Record<string, Stat>;
+  triples: Record<string, Stat>;
   sessions: SessionSummary[];
 };
 
@@ -41,12 +43,13 @@ export type Attempt = {
   expected: string;
   actual: string;
   previous?: string;
+  previousTwo?: string;
   latencyMs?: number;
 };
 
 export type RankedTarget = {
   target: string;
-  kind: "key" | "pair";
+  kind: "key" | "pair" | "triple";
   accuracy: number;
   latencyMs: number;
   attempts: number;
@@ -126,7 +129,7 @@ function validLatency(latencyMs: unknown): latencyMs is number {
 }
 
 function isTrainingLetter(value: string): boolean {
-  return TRAINING_LETTER.test(value);
+  return typeof value === "string" && TRAINING_LETTER.test(value);
 }
 
 function pairTarget(
@@ -141,6 +144,27 @@ function pairTarget(
     return null;
   }
   return `${previous}${expected}`;
+}
+
+function tripleTarget(
+  previousTwo: string | undefined,
+  previous: string | undefined,
+  expected: string,
+): string | null {
+  if (
+    previousTwo === undefined ||
+    !/^[a-z]{2}$/.test(previousTwo) ||
+    !isTrainingLetter(expected)
+  ) {
+    return null;
+  }
+  if (
+    previous !== undefined &&
+    (!isTrainingLetter(previous) || !previousTwo.endsWith(previous))
+  ) {
+    return null;
+  }
+  return `${previousTwo}${expected}`;
 }
 
 function recordInto(
@@ -217,6 +241,7 @@ export function createProfile(): TrainingProfile {
     version: PROFILE_VERSION,
     keys: {},
     pairs: {},
+    triples: {},
     sessions: [],
   };
 }
@@ -224,8 +249,10 @@ export function createProfile(): TrainingProfile {
 /**
  * Records one expected target. `errors` is intentionally based on the raw
  * expected/actual comparison, so corrections still count as errors. The UI
- * decides whether `previous` is a valid neighboring character before calling
- * this function.
+ * decides whether `previous` and `previousTwo` are valid neighboring
+ * characters before calling this function. A triple's latency is the same
+ * final transition latency recorded for its terminal character, rather than
+ * the duration of the whole three-character sequence.
  */
 export function recordAttempt(
   profile: TrainingProfile,
@@ -243,6 +270,15 @@ export function recordAttempt(
   const pair = pairTarget(attempt.previous, attempt.expected);
   if (pair !== null) {
     recordInto(statFor(profile.pairs, pair), isError, attempt.latencyMs);
+  }
+
+  const triple = tripleTarget(
+    attempt.previousTwo,
+    attempt.previous,
+    attempt.expected,
+  );
+  if (triple !== null) {
+    recordInto(statFor(profile.triples, triple), isError, attempt.latencyMs);
   }
 }
 
@@ -292,8 +328,10 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
   const ranked: RankedTarget[] = [];
   const keyEntries = Object.entries(profile.keys);
   const pairEntries = Object.entries(profile.pairs);
+  const tripleEntries = Object.entries(profile.triples ?? {});
   const keyBaseline = baselineFor(keyEntries, MIN_KEY_ATTEMPTS);
   const pairBaseline = baselineFor(pairEntries, MIN_PAIR_ATTEMPTS);
+  const tripleBaseline = baselineFor(tripleEntries, MIN_TRIPLE_ATTEMPTS);
 
   for (const [target, stat] of keyEntries) {
     if (stat.attempts < MIN_KEY_ATTEMPTS) continue;
@@ -335,6 +373,29 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
     });
   }
 
+  for (const [target, stat] of tripleEntries) {
+    if (stat.attempts < MIN_TRIPLE_ATTEMPTS) continue;
+    const errorRate = stat.errors / stat.attempts;
+    const latencyMs =
+      stat.latencySamples === 0 ? 0 : stat.totalLatency / stat.latencySamples;
+    const errorSignal = relativeErrorSignal(
+      errorRate,
+      tripleBaseline.errorRate,
+    );
+    const latencySignal = relativeLatencySignal(
+      latencyMs,
+      tripleBaseline.latencyMs,
+    );
+    ranked.push({
+      target,
+      kind: "triple",
+      accuracy: 1 - errorRate,
+      latencyMs,
+      attempts: stat.attempts,
+      score: 0.7 * errorSignal + 0.3 * latencySignal,
+    });
+  }
+
   return ranked
     .filter((target) => target.score > 0)
     .sort((left, right) => {
@@ -345,7 +406,14 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
       if (right.attempts !== left.attempts) {
         return right.attempts - left.attempts;
       }
-      if (left.kind !== right.kind) return left.kind === "pair" ? -1 : 1;
+      if (left.kind !== right.kind) {
+        const kindOrder: Record<RankedTarget["kind"], number> = {
+          triple: 0,
+          pair: 1,
+          key: 2,
+        };
+        return kindOrder[left.kind] - kindOrder[right.kind];
+      }
       return left.target.localeCompare(right.target);
     });
 }
@@ -481,6 +549,7 @@ function cloneProfile(profile: TrainingProfile): TrainingProfile {
   const normalized = createProfile();
   normalized.keys = cloneStats(profile.keys);
   normalized.pairs = cloneStats(profile.pairs);
+  normalized.triples = cloneStats(profile.triples ?? {});
   normalized.sessions = profile.sessions
     .map((summary) => boundedSummary(summary))
     .filter((summary): summary is SessionSummary => summary !== null)
@@ -515,6 +584,7 @@ export function mergeSession(
   const session = cloneProfile(sessionProfile);
   mergeStats(merged.keys, session.keys);
   mergeStats(merged.pairs, session.pairs);
+  mergeStats(merged.triples, session.triples);
 
   const bounded = boundedSummary(summary);
   if (bounded !== null) {
@@ -548,6 +618,13 @@ export function parseProfile(raw: string | null): TrainingProfile {
     if (typeof candidate.pairs === "object" && candidate.pairs !== null) {
       profile.pairs = cloneStats(candidate.pairs);
     }
+    if (
+      typeof candidate.triples === "object" &&
+      candidate.triples !== null &&
+      !Array.isArray(candidate.triples)
+    ) {
+      profile.triples = cloneStats(candidate.triples);
+    }
     if (Array.isArray(candidate.sessions)) {
       profile.sessions = candidate.sessions
         .map((summary) => boundedSummary(summary))
@@ -560,6 +637,7 @@ export function parseProfile(raw: string | null): TrainingProfile {
     // preserves the useful part of a malformed or oversized local payload.
     profile.keys = capStats(profile.keys);
     profile.pairs = capStats(profile.pairs);
+    profile.triples = capStats(profile.triples);
     return profile;
   } catch {
     return createProfile();

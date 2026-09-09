@@ -2,9 +2,9 @@
 
 This fork adds **train → smart training** at `/training` while preserving the normal Monkeytype typing test.
 
-- A repeatable English diagnostic, adaptive drills, and up to three manually selected keys or letter pairs.
+- A repeatable English diagnostic, adaptive drills, and up to three manually selected keys, two-letter pairs, or three-letter sequences.
 - Accuracy and transition-time recommendations from completed training sessions, with a keyboard focus view and recent history.
-- Device-local progress, pause/resume, and natural text editing: type freely, correct with Backspace, and keep a record of mistakes.
+- Browser-local progress, pause/resume, and natural text editing: type freely, correct with Backspace, and keep a record of mistakes.
 
 For a standalone training app with no Firebase or backend setup, use Node 24 and the pinned pnpm version:
 
