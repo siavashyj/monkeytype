@@ -3,6 +3,7 @@ export const PROFILE_VERSION = 1 as const;
 const MIN_KEY_ATTEMPTS = 5;
 const MIN_PAIR_ATTEMPTS = 3;
 const MIN_TRIPLE_ATTEMPTS = 3;
+const MIN_QUAD_ATTEMPTS = 3;
 const MIN_LATENCY_MS = 30;
 const MAX_LATENCY_MS = 2000;
 const MERGE_DECAY = 0.9;
@@ -36,6 +37,7 @@ export type TrainingProfile = {
   keys: Record<string, Stat>;
   pairs: Record<string, Stat>;
   triples: Record<string, Stat>;
+  quads: Record<string, Stat>;
   sessions: SessionSummary[];
 };
 
@@ -44,12 +46,13 @@ export type Attempt = {
   actual: string;
   previous?: string;
   previousTwo?: string;
+  previousThree?: string;
   latencyMs?: number;
 };
 
 export type RankedTarget = {
   target: string;
-  kind: "key" | "pair" | "triple";
+  kind: "key" | "pair" | "triple" | "quad";
   accuracy: number;
   latencyMs: number;
   attempts: number;
@@ -167,6 +170,20 @@ function tripleTarget(
   return `${previousTwo}${expected}`;
 }
 
+function quadTarget(attempt: Attempt): string | null {
+  const { previousThree, previousTwo, previous, expected } = attempt;
+  if (
+    previousThree === undefined ||
+    !/^[a-z]{3}$/.test(previousThree) ||
+    !isTrainingLetter(expected) ||
+    (previousTwo !== undefined && previousTwo !== previousThree.slice(-2)) ||
+    (previous !== undefined && previous !== previousThree.slice(-1))
+  ) {
+    return null;
+  }
+  return `${previousThree}${expected}`;
+}
+
 function recordInto(
   stat: Stat,
   isError: boolean,
@@ -242,6 +259,7 @@ export function createProfile(): TrainingProfile {
     keys: {},
     pairs: {},
     triples: {},
+    quads: {},
     sessions: [],
   };
 }
@@ -249,10 +267,10 @@ export function createProfile(): TrainingProfile {
 /**
  * Records one expected target. `errors` is intentionally based on the raw
  * expected/actual comparison, so corrections still count as errors. The UI
- * decides whether `previous` and `previousTwo` are valid neighboring
- * characters before calling this function. A triple's latency is the same
+ * decides whether `previous`, `previousTwo`, and `previousThree` match the
+ * neighboring characters. Each sequence uses the same
  * final transition latency recorded for its terminal character, rather than
- * the duration of the whole three-character sequence.
+ * the duration of the whole sequence.
  */
 export function recordAttempt(
   profile: TrainingProfile,
@@ -279,6 +297,11 @@ export function recordAttempt(
   );
   if (triple !== null) {
     recordInto(statFor(profile.triples, triple), isError, attempt.latencyMs);
+  }
+
+  const quad = quadTarget(attempt);
+  if (quad !== null) {
+    recordInto(statFor(profile.quads, quad), isError, attempt.latencyMs);
   }
 }
 
@@ -329,9 +352,11 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
   const keyEntries = Object.entries(profile.keys);
   const pairEntries = Object.entries(profile.pairs);
   const tripleEntries = Object.entries(profile.triples ?? {});
+  const quadEntries = Object.entries(profile.quads ?? {});
   const keyBaseline = baselineFor(keyEntries, MIN_KEY_ATTEMPTS);
   const pairBaseline = baselineFor(pairEntries, MIN_PAIR_ATTEMPTS);
   const tripleBaseline = baselineFor(tripleEntries, MIN_TRIPLE_ATTEMPTS);
+  const quadBaseline = baselineFor(quadEntries, MIN_QUAD_ATTEMPTS);
 
   for (const [target, stat] of keyEntries) {
     if (stat.attempts < MIN_KEY_ATTEMPTS) continue;
@@ -396,6 +421,26 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
     });
   }
 
+  for (const [target, stat] of quadEntries) {
+    if (stat.attempts < MIN_QUAD_ATTEMPTS) continue;
+    const errorRate = stat.errors / stat.attempts;
+    const latencyMs =
+      stat.latencySamples === 0 ? 0 : stat.totalLatency / stat.latencySamples;
+    const errorSignal = relativeErrorSignal(errorRate, quadBaseline.errorRate);
+    const latencySignal = relativeLatencySignal(
+      latencyMs,
+      quadBaseline.latencyMs,
+    );
+    ranked.push({
+      target,
+      kind: "quad",
+      accuracy: 1 - errorRate,
+      latencyMs,
+      attempts: stat.attempts,
+      score: 0.7 * errorSignal + 0.3 * latencySignal,
+    });
+  }
+
   return ranked
     .filter((target) => target.score > 0)
     .sort((left, right) => {
@@ -408,9 +453,10 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
       }
       if (left.kind !== right.kind) {
         const kindOrder: Record<RankedTarget["kind"], number> = {
-          triple: 0,
-          pair: 1,
-          key: 2,
+          quad: 0,
+          triple: 1,
+          pair: 2,
+          key: 3,
         };
         return kindOrder[left.kind] - kindOrder[right.kind];
       }
@@ -550,6 +596,7 @@ function cloneProfile(profile: TrainingProfile): TrainingProfile {
   normalized.keys = cloneStats(profile.keys);
   normalized.pairs = cloneStats(profile.pairs);
   normalized.triples = cloneStats(profile.triples ?? {});
+  normalized.quads = cloneStats(profile.quads ?? {});
   normalized.sessions = profile.sessions
     .map((summary) => boundedSummary(summary))
     .filter((summary): summary is SessionSummary => summary !== null)
@@ -585,6 +632,7 @@ export function mergeSession(
   mergeStats(merged.keys, session.keys);
   mergeStats(merged.pairs, session.pairs);
   mergeStats(merged.triples, session.triples);
+  mergeStats(merged.quads, session.quads);
 
   const bounded = boundedSummary(summary);
   if (bounded !== null) {
@@ -625,6 +673,13 @@ export function parseProfile(raw: string | null): TrainingProfile {
     ) {
       profile.triples = cloneStats(candidate.triples);
     }
+    if (
+      typeof candidate.quads === "object" &&
+      candidate.quads !== null &&
+      !Array.isArray(candidate.quads)
+    ) {
+      profile.quads = cloneStats(candidate.quads);
+    }
     if (Array.isArray(candidate.sessions)) {
       profile.sessions = candidate.sessions
         .map((summary) => boundedSummary(summary))
@@ -638,6 +693,7 @@ export function parseProfile(raw: string | null): TrainingProfile {
     profile.keys = capStats(profile.keys);
     profile.pairs = capStats(profile.pairs);
     profile.triples = capStats(profile.triples);
+    profile.quads = capStats(profile.quads);
     return profile;
   } catch {
     return createProfile();

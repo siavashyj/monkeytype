@@ -215,6 +215,11 @@ export function TrainingSession(): JSXElement {
               next.slice(index - 2, index) === text().slice(index - 2, index)
                 ? text().slice(index - 2, index)
                 : undefined,
+            previousThree:
+              index >= 3 &&
+              next.slice(index - 3, index) === text().slice(index - 3, index)
+                ? text().slice(index - 3, index)
+                : undefined,
             latencyMs:
               continuous && lastKey !== null ? now - lastKey : undefined,
           });
@@ -273,11 +278,11 @@ export function TrainingSession(): JSXElement {
     event.preventDefault();
     const target = manual().trim().toLowerCase();
     if (
-      !/^[a-z]{1,3}$/.test(target) ||
+      !/^[a-z]{1,4}$/.test(target) ||
       !vocabulary.some((word) => word.includes(target))
     ) {
       setNotice(
-        "Choose a key or a 2–3-letter sequence found in an English word.",
+        "Choose a key or a 2–4-letter sequence found in an English word.",
       );
       return;
     }
@@ -356,7 +361,7 @@ export function TrainingSession(): JSXElement {
               {mode() === "diagnostic"
                 ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
-                  ? "Choose up to three keys or 2–3-letter sequences below. Your drill mixes focused words with everyday words."
+                  ? "Choose up to three keys or 2–4-letter sequences below. Your drill mixes focused words with everyday words."
                   : targets().length
                     ? `Practice ${targets().join(", ")} with a drill based on your recent accuracy and rhythm.`
                     : "Complete a diagnostic or a mixed drill so we can find useful practice targets."}
@@ -610,10 +615,10 @@ export function TrainingSession(): JSXElement {
               <input
                 id="training-target"
                 value={manual()}
-                maxLength={3}
+                maxLength={4}
                 disabled={running()}
                 onInput={(event) => setManual(event.currentTarget.value)}
-                placeholder="the"
+                placeholder="tion"
                 class="w-20 rounded bg-sub-alt p-2 text-text"
               />
               <Button text="add target" type="submit" disabled={running()} />
@@ -648,7 +653,7 @@ export function TrainingSession(): JSXElement {
                 </p>
                 <p class="mt-2 text-sm text-sub">
                   Recommendations appear after at least five attempts for a key
-                  or three for a 2–3-letter sequence. We look for errors first,
+                  or three for a 2–4-letter sequence. We look for errors first,
                   then slower transitions.
                 </p>
               </div>
@@ -672,7 +677,9 @@ export function TrainingSession(): JSXElement {
                           ? "key"
                           : item.kind === "pair"
                             ? "2-letter"
-                            : "3-letter"}{" "}
+                            : item.kind === "triple"
+                              ? "3-letter"
+                              : "4-letter"}{" "}
                         · {Math.round(item.attempts)} weighted samples
                       </span>
                     </span>

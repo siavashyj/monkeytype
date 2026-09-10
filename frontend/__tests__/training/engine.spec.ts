@@ -18,6 +18,7 @@ function repeatAttempt(
   options: {
     previous?: string;
     previousTwo?: string;
+    previousThree?: string;
     latencyMs?: number;
   } = {},
 ): void {
@@ -27,6 +28,7 @@ function repeatAttempt(
       actual,
       previous: options.previous,
       previousTwo: options.previousTwo,
+      previousThree: options.previousThree,
       latencyMs: options.latencyMs,
     });
   }
@@ -147,6 +149,96 @@ describe("recordAttempt", () => {
       latencySamples: 1,
     });
     expect(profile.triples["bcc"]).toBeUndefined();
+  });
+
+  it("records terminal quad errors with final-transition latency and rejects invalid context", () => {
+    const profile = createProfile();
+
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "x",
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 2_000,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "ab ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "x",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "c",
+      previousTwo: "ac",
+      previousThree: "abc",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "Abc",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "d",
+      actual: "d",
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "ab",
+      latencyMs: 100,
+    });
+
+    expect(profile.quads["abcd"]).toEqual({
+      attempts: 2,
+      errors: 1,
+      totalLatency: 100,
+      latencySamples: 1,
+    });
+  });
+
+  it("accepts only bounded successful quad latency samples", () => {
+    const profile = createProfile();
+
+    for (const latencyMs of [29, 30, 2_000, 2_001, Number.NaN]) {
+      recordAttempt(profile, {
+        expected: "d",
+        actual: "d",
+        previous: "c",
+        previousTwo: "bc",
+        previousThree: "abc",
+        latencyMs,
+      });
+    }
+
+    expect(profile.quads["abcd"]).toEqual({
+      attempts: 5,
+      errors: 0,
+      totalLatency: 2_030,
+      latencySamples: 2,
+    });
   });
 
   it("accepts only bounded latency samples", () => {
@@ -313,6 +405,49 @@ describe("rankTargets", () => {
     expect(triple?.accuracy).toBeCloseTo(1 / 3);
   });
 
+  it("requires three quad observations and uses a separate quad baseline", () => {
+    const profile = createProfile();
+    repeatAttempt(profile, "d", "x", 2, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 120,
+    });
+
+    expect(
+      rankTargets(profile).some(
+        (target) => target.kind === "quad" && target.target === "abcd",
+      ),
+    ).toBe(false);
+
+    repeatAttempt(profile, "d", "d", 1, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 120,
+    });
+    repeatAttempt(profile, "e", "e", 3, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 120,
+    });
+    profile.keys = {};
+    profile.pairs = {};
+    profile.triples = {};
+
+    const quad = rankTargets(profile).find(
+      (target) => target.kind === "quad" && target.target === "abcd",
+    );
+    expect(quad).toMatchObject({
+      target: "abcd",
+      kind: "quad",
+      attempts: 3,
+      latencyMs: 120,
+    });
+    expect(quad?.accuracy).toBeCloseTo(1 / 3);
+  });
+
   it("orders equal-score target kinds deterministically", () => {
     const stat = (attempts: number, latencyMs: number): Stat => ({
       attempts,
@@ -324,8 +459,10 @@ describe("rankTargets", () => {
     profile.keys = { a: stat(5, 100), b: stat(5, 200) };
     profile.pairs = { ab: stat(5, 100), cd: stat(5, 200) };
     profile.triples = { abc: stat(5, 100), def: stat(5, 200) };
+    profile.quads = { abcd: stat(5, 100), efgh: stat(5, 200) };
 
     expect(rankTargets(profile).map((target) => target.kind)).toEqual([
+      "quad",
       "triple",
       "pair",
       "key",
@@ -394,6 +531,20 @@ describe("generateDrill", () => {
       drill.filter((word) => word.includes("the")).length,
     ).toBeGreaterThanOrEqual(7);
   });
+
+  it("uses four-letter targets to enrich focused word selection", () => {
+    const drill = generateDrill(
+      ["abcd", "xabcd", "cat", "dog"],
+      ["abcd"],
+      10,
+      () => 0,
+    );
+
+    expect(drill).toHaveLength(10);
+    expect(
+      drill.filter((word) => word.includes("abcd")).length,
+    ).toBeGreaterThanOrEqual(7);
+  });
 });
 
 describe("mergeSession", () => {
@@ -441,6 +592,34 @@ describe("mergeSession", () => {
     });
     expect(profile.triples["abc"]?.attempts).toBe(10);
     expect(session.triples["abc"]?.attempts).toBe(2);
+  });
+
+  it("decays and merges quad evidence independently", () => {
+    const profile = createProfile();
+    repeatAttempt(profile, "d", "x", 10, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 100,
+    });
+    const session = createProfile();
+    repeatAttempt(session, "d", "d", 2, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 200,
+    });
+
+    const merged = mergeSession(profile, session, summary);
+
+    expect(merged.quads["abcd"]).toEqual({
+      attempts: 11,
+      errors: 9,
+      totalLatency: 400,
+      latencySamples: 2,
+    });
+    expect(profile.quads["abcd"]?.attempts).toBe(10);
+    expect(session.quads["abcd"]?.attempts).toBe(2);
   });
 
   it("keeps only the latest 50 session summaries", () => {
@@ -517,11 +696,62 @@ describe("parseProfile", () => {
       }),
     );
     const malformed = parseProfile(
-      JSON.stringify({ version: 1, triples: [{ attempts: 5 }] }),
+      JSON.stringify({
+        version: 1,
+        triples: [{ attempts: 5 }],
+        quads: [{ attempts: 5 }],
+      }),
     );
 
     expect(oldProfile.triples).toEqual({});
+    expect(oldProfile.quads).toEqual({});
     expect(malformed.triples).toEqual({});
+    expect(malformed.quads).toEqual({});
+  });
+
+  it("loads v1 profiles without quads while preserving existing maps and sessions", () => {
+    const stat: Stat = {
+      attempts: 3,
+      errors: 1,
+      totalLatency: 120,
+      latencySamples: 1,
+    };
+    const parsed = parseProfile(
+      JSON.stringify({
+        version: 1,
+        keys: { a: stat },
+        pairs: { ab: stat },
+        triples: { abc: stat },
+        sessions: [summary],
+      }),
+    );
+
+    expect(parsed.keys["a"]).toEqual(stat);
+    expect(parsed.pairs["ab"]).toEqual(stat);
+    expect(parsed.triples["abc"]).toEqual(stat);
+    expect(parsed.quads).toEqual({});
+    expect(parsed.sessions).toEqual([summary]);
+  });
+
+  it("caps quad stats at 2048 entries", () => {
+    const quads = Object.fromEntries(
+      Array.from({ length: 2_050 }, (_, index) => [
+        `q${String(index).padStart(4, "0")}`,
+        {
+          attempts: index + 1,
+          errors: 0,
+          totalLatency: (index + 1) * 100,
+          latencySamples: index + 1,
+        },
+      ]),
+    );
+
+    const parsed = parseProfile(JSON.stringify({ version: 1, quads }));
+
+    expect(Object.keys(parsed.quads)).toHaveLength(2_048);
+    expect(parsed.quads["q2049"]).toBeDefined();
+    expect(parsed.quads["q0000"]).toBeUndefined();
+    expect(parsed.quads["q0001"]).toBeUndefined();
   });
 
   it("round-trips a profile without sharing mutable arrays", () => {
@@ -532,6 +762,12 @@ describe("parseProfile", () => {
       previousTwo: "ab",
       latencyMs: 100,
     });
+    repeatAttempt(profile, "d", "d", 3, {
+      previous: "c",
+      previousTwo: "bc",
+      previousThree: "abc",
+      latencyMs: 100,
+    });
     profile.sessions.push(summary);
 
     const parsed = parseProfile(JSON.stringify(profile));
@@ -539,6 +775,7 @@ describe("parseProfile", () => {
 
     expect(parsed.keys["a"]).toEqual(profile.keys["a"]);
     expect(parsed.triples["abc"]).toEqual(profile.triples["abc"]);
+    expect(parsed.quads["abcd"]).toEqual(profile.quads["abcd"]);
     expect(profile.sessions[0]?.targets).toEqual(["a", "th"]);
   });
 });

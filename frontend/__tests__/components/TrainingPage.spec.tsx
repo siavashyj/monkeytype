@@ -87,6 +87,7 @@ describe("TrainingSession", () => {
 
     const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
       triples: Record<string, { attempts: number; errors: number }>;
+      quads: Record<string, { attempts: number; errors: number }>;
       sessions: Array<{
         kind: string;
         accuracy: number;
@@ -99,6 +100,10 @@ describe("TrainingSession", () => {
     });
     expect(
       Object.keys(stored.triples).every((target) => /^[a-z]{3}$/.test(target)),
+    ).toBe(true);
+    expect(stored.quads["quic"]).toMatchObject({ attempts: 1, errors: 0 });
+    expect(
+      Object.keys(stored.quads).every((target) => /^[a-z]{4}$/.test(target)),
     ).toBe(true);
     expect(stored.sessions).toHaveLength(1);
     expect(stored.sessions[0]).toMatchObject({
@@ -376,7 +381,7 @@ describe("TrainingSession", () => {
     });
   });
 
-  it("rejects unknown manual targets and accepts pairs and triples", () => {
+  it("rejects unknown manual targets and accepts two- to four-letter sequences", () => {
     renderTraining();
     fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
 
@@ -389,7 +394,7 @@ describe("TrainingSession", () => {
     fireEvent.input(targetInput, { target: { value: "qx" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Choose a key or a 2–3-letter sequence found in an English word.",
+      "Choose a key or a 2–4-letter sequence found in an English word.",
     );
     expect(start).toBeDisabled();
 
@@ -398,17 +403,21 @@ describe("TrainingSession", () => {
     expect(screen.getByRole("button", { name: "th ×" })).toBeInTheDocument();
     expect(start).not.toBeDisabled();
 
-    expect(targetInput).toHaveAttribute("maxlength", "3");
+    expect(targetInput).toHaveAttribute("maxlength", "4");
     fireEvent.input(targetInput, { target: { value: "THE" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("button", { name: "the ×" })).toBeInTheDocument();
-    fireEvent.input(targetInput, { target: { value: "word" } });
+    fireEvent.input(targetInput, { target: { value: "WORD" } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(screen.getByRole("button", { name: "word ×" })).toBeInTheDocument();
+    fireEvent.input(targetInput, { target: { value: "words" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(
-      screen.queryByRole("button", { name: "word ×" }),
+      screen.queryByRole("button", { name: "words ×" }),
     ).not.toBeInTheDocument();
     fireEvent.click(start);
     expect(promptText()).toContain("the");
+    expect(promptText()).toContain("word");
   });
 
   it("recommends a weak three-letter sequence for adaptive practice", () => {
@@ -431,5 +440,68 @@ describe("TrainingSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("the");
+  });
+  it("retains a four-letter error after correcting its final character", () => {
+    renderTraining();
+    const input = startDiagnostic();
+    const text = promptText();
+    typeText(input, `${text.slice(0, 7)}x`);
+    keyDown(input, "Backspace");
+    typeText(input, text.slice(7));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      quads: Record<string, { attempts: number; errors: number }>;
+    };
+    expect(stored.quads["quic"]).toMatchObject({ attempts: 2, errors: 1 });
+    expect(stored.quads["uick"]).toMatchObject({ attempts: 1, errors: 0 });
+  });
+
+  it("adds four-letter stats to a saved triple profile and recommends them after reload", () => {
+    const summary = {
+      date: 1700000000000,
+      kind: "diagnostic",
+      accuracy: 0.9,
+      wpm: 40,
+      targets: ["the"],
+      characters: 100,
+      durationMs: 30000,
+    };
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        keys: {},
+        pairs: {},
+        triples: {
+          zzz: { attempts: 6, errors: 3, totalLatency: 300, latencySamples: 3 },
+        },
+        sessions: [summary],
+      }),
+    );
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "diagnostic" }));
+    const input = startDiagnostic();
+    const text = promptText();
+    typeText(input, `${text.slice(0, 7)}x`);
+    keyDown(input, "Backspace");
+    typeText(input, "x");
+    keyDown(input, "Backspace");
+    typeText(input, text.slice(7));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      triples: Record<string, { attempts: number }>;
+      quads: Record<string, { attempts: number; errors: number }>;
+      sessions: unknown[];
+    };
+    expect(stored.sessions[0]).toEqual(summary);
+    expect(stored.triples["zzz"]?.attempts).toBe(5.4);
+    expect(stored.quads["quic"]).toMatchObject({ attempts: 3, errors: 2 });
+    cleanup();
+    renderTraining();
+    expect(
+      screen.getByText(/4-letter · 3 weighted samples/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    expect(promptText()).toContain("quic");
   });
 });
