@@ -27,6 +27,7 @@ import { Fa } from "../../common/Fa";
 import { TrainingPrompt } from "./TrainingPrompt";
 
 const storageKey = "monkeytype.smartTraining.v1";
+const wordPairsPreferenceKey = "monkeytype.smartTraining.wordPairsEnabled.v1";
 const diagnostic =
   "the quick brown fox jumps over the lazy dog then we write each word with care and keep a steady rhythm when learning something new";
 const vocabulary = [
@@ -53,6 +54,15 @@ export function TrainingSession(): JSXElement {
   );
   const [mode, setMode] = createSignal<SessionSummary["kind"]>(
     untrack(profile).sessions.length ? "adaptive" : "diagnostic",
+  );
+  const [wordPairsEnabled, setWordPairsEnabled] = createSignal(
+    (() => {
+      try {
+        return localStorage.getItem(wordPairsPreferenceKey) !== "false";
+      } catch {
+        return true;
+      }
+    })(),
   );
   const [selected, setSelected] = createSignal<string[]>([]);
   const [manual, setManual] = createSignal("");
@@ -84,7 +94,11 @@ export function TrainingSession(): JSXElement {
   let lastKey: number | null = null;
   let lastCorrect = false;
   let lastPosition = -1;
-  const ranked = createMemo(() => rankTargets(profile()));
+  const ranked = createMemo(() =>
+    rankTargets(profile()).filter(
+      (target) => wordPairsEnabled() || target.kind !== "wordPair",
+    ),
+  );
   const recommended = (limit: number): ReturnType<typeof rankTargets> => {
     const best = ranked().slice(0, limit);
     const phrase = ranked().find((item) => item.kind === "wordPair");
@@ -138,6 +152,26 @@ export function TrainingSession(): JSXElement {
     }
   };
 
+  const changeWordPairs = (enabled: boolean): void => {
+    if (running()) return;
+    setWordPairsEnabled(enabled);
+    if (!enabled) {
+      setSelected((items) =>
+        items.filter((target) => !isWordPairTarget(target)),
+      );
+    }
+    setManual("");
+    setNotice("");
+    try {
+      localStorage.setItem(wordPairsPreferenceKey, String(enabled));
+      setStorageNotice("");
+    } catch {
+      setStorageNotice(
+        "Could not save this preference. It lasts until you leave the page.",
+      );
+    }
+  };
+
   const start = (): void => {
     const chosen = mode() === "diagnostic" ? [] : targets();
     const words =
@@ -185,7 +219,10 @@ export function TrainingSession(): JSXElement {
     activeSince = null;
     setRunning(false);
     setResult(summary);
-    persist(mergeSession(profile(), session, summary));
+    const merged = mergeSession(profile(), session, summary);
+    // Disabled word-pair practice must not age or discard its saved evidence.
+    if (!wordPairsEnabled()) merged.wordPairs = profile().wordPairs;
+    persist(merged);
   };
 
   const handleInput = (
@@ -240,12 +277,14 @@ export function TrainingSession(): JSXElement {
               continuous && lastKey !== null ? now - lastKey : undefined,
           });
         }
-        trackWordPairs(
-          session,
-          index,
-          character,
-          continuous && lastKey !== null ? now - lastKey : undefined,
-        );
+        if (wordPairsEnabled()) {
+          trackWordPairs(
+            session,
+            index,
+            character,
+            continuous && lastKey !== null ? now - lastKey : undefined,
+          );
+        }
         setAttempts((value) => value + 1);
         if (!correct) setErrors((value) => value + 1);
         lastKey = now;
@@ -305,6 +344,10 @@ export function TrainingSession(): JSXElement {
     const validPhrase =
       isWordPairTarget(target) &&
       target.split(" ").every((word) => vocabularySet.has(word));
+    if (validPhrase && !wordPairsEnabled()) {
+      setNotice("Turn on word combinations to add a word pair.");
+      return;
+    }
     if (!validSequence && !validPhrase) {
       setNotice(
         "Choose a key, a 2–4-letter sequence, or two words from the practice vocabulary.",
@@ -347,6 +390,21 @@ export function TrainingSession(): JSXElement {
             )}
           </For>
         </div>
+        <label
+          class="flex items-center gap-2 text-sm text-text"
+          title="Track and practice consecutive word pairs. Change between drills."
+        >
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="Word combinations"
+            checked={wordPairsEnabled()}
+            disabled={running()}
+            onChange={(event) => changeWordPairs(event.currentTarget.checked)}
+            class="h-4 w-4 accent-main disabled:opacity-50"
+          />
+          word combinations
+        </label>
         <Show when={mode() !== "diagnostic"}>
           <div class="flex items-center gap-2 text-sm">
             <span class="text-sub">words</span>
@@ -386,7 +444,9 @@ export function TrainingSession(): JSXElement {
               {mode() === "diagnostic"
                 ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
-                  ? "Choose up to three keys, letter sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
+                  ? wordPairsEnabled()
+                    ? "Choose up to three keys, letter sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
+                    : "Choose up to three keys or letter sequences below. Your drill mixes focused words with everyday words."
                   : targets().length
                     ? `Practice ${targets().join(", ")} with a drill based on your recent accuracy and rhythm.`
                     : "Complete a diagnostic or a mixed drill so we can find useful practice targets."}
@@ -616,15 +676,17 @@ export function TrainingSession(): JSXElement {
               onSubmit={addTarget}
             >
               <label for="training-target" class="text-sm">
-                key, sequence, or word pair
+                {wordPairsEnabled()
+                  ? "key, sequence, or word pair"
+                  : "key or sequence"}
               </label>
               <input
                 id="training-target"
                 value={manual()}
-                maxLength={61}
+                maxLength={wordPairsEnabled() ? 61 : 4}
                 disabled={running()}
                 onInput={(event) => setManual(event.currentTarget.value)}
-                placeholder="of the"
+                placeholder={wordPairsEnabled() ? "of the" : "tion"}
                 class="w-48 rounded bg-sub-alt p-2 text-text"
               />
               <Button text="add target" type="submit" disabled={running()} />
@@ -659,9 +721,11 @@ export function TrainingSession(): JSXElement {
                 </p>
                 <p class="mt-2 text-sm text-sub">
                   Recommendations appear after at least five attempts for a key
-                  or three for a 2–4-letter sequence. Word pairs need three
-                  weighted encounters. We look for errors first, then slower
-                  transitions.
+                  or three for a 2–4-letter sequence.{" "}
+                  <Show when={wordPairsEnabled()}>
+                    Word pairs need three weighted encounters.{" "}
+                  </Show>
+                  We look for errors first, then slower transitions.
                 </p>
               </div>
             }

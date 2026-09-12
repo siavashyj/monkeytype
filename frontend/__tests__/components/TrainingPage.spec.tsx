@@ -604,4 +604,91 @@ describe("TrainingSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("of the");
   });
+  it("remembers disabled word combinations and preserves their saved evidence through a drill", () => {
+    const pair = {
+      attempts: 18,
+      errors: 3,
+      latencySamples: 15,
+      totalLatency: 1500,
+      occurrences: 3,
+    };
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        keys: {},
+        pairs: {},
+        triples: {},
+        quads: {},
+        wordPairs: { "of the": pair },
+        sessions: [],
+      }),
+    );
+    renderTraining();
+    expect(
+      screen.getByText(/word pair · 3.0 weighted encounters/),
+    ).toBeInTheDocument();
+    const toggle = screen.getByRole("switch", { name: "Word combinations" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByText(/word pair ·/)).not.toBeInTheDocument();
+    cleanup();
+    renderTraining();
+    expect(
+      screen.getByRole("switch", { name: "Word combinations" }),
+    ).not.toBeChecked();
+    const input = startDiagnostic();
+    expect(
+      screen.getByRole("switch", { name: "Word combinations" }),
+    ).toBeDisabled();
+    typeText(input, promptText());
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      wordPairs: unknown;
+      keys: Record<string, unknown>;
+    };
+    expect(stored.wordPairs).toEqual({ "of the": pair });
+    expect(stored.keys["t"]).toBeDefined();
+    fireEvent.click(screen.getByRole("switch", { name: "Word combinations" }));
+    expect(
+      screen.getByText(/word pair · 3.0 weighted encounters/),
+    ).toBeInTheDocument();
+  });
+
+  it("removes selected word pairs when disabled while keeping letter targets usable", () => {
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
+    let targetInput = screen.getByRole("textbox", {
+      name: "key, sequence, or word pair",
+    });
+    for (const value of ["of the", "th"]) {
+      fireEvent.input(targetInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    }
+    fireEvent.click(screen.getByRole("switch", { name: "Word combinations" }));
+    expect(
+      screen.queryByRole("button", { name: "of the ×" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "th ×" })).toBeInTheDocument();
+    targetInput = screen.getByRole("textbox", { name: "key or sequence" });
+    expect(targetInput).toHaveAttribute("maxlength", "4");
+    fireEvent.input(targetInput, { target: { value: "of the" } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Turn on word combinations to add a word pair.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Typing practice",
+    });
+    typeText(input, promptText());
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      wordPairs: unknown;
+      sessions: { targets: string[] }[];
+    };
+    expect(stored.wordPairs).toEqual({});
+    expect(stored.sessions[0]?.targets).toEqual(["th"]);
+  });
 });
