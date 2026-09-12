@@ -22,6 +22,7 @@ import { getTextInsertion } from "../../../training/input";
 import { cn } from "../../../utils/cn";
 import { Button } from "../../common/Button";
 import { Fa } from "../../common/Fa";
+import { TrainingPrompt } from "./TrainingPrompt";
 
 const vocabulary = english.words.map((word) => word.toLowerCase());
 const storageKey = "monkeytype.smartTraining.v1";
@@ -371,11 +372,13 @@ export function TrainingSession(): JSXElement {
             <div class="flex gap-6 text-main" aria-label="Session statistics">
               <div>
                 <div class="text-sm text-sub">wpm</div>
-                <div class="text-3xl">{result()?.wpm ?? wpm()}</div>
+                <div class="w-[6ch] text-3xl tabular-nums">
+                  {result()?.wpm ?? wpm()}
+                </div>
               </div>
               <div>
                 <div class="text-sm text-sub">accuracy</div>
-                <div class="text-3xl">
+                <div class="w-[6ch] text-3xl tabular-nums">
                   {result()
                     ? ((result()?.accuracy ?? 0) * 100).toFixed(1)
                     : accuracy().toFixed(1)}
@@ -437,37 +440,16 @@ export function TrainingSession(): JSXElement {
               aria-valuenow={position()}
             >
               <div
-                class="h-full bg-main"
-                style={{ width: `${(position() / text().length) * 100}%` }}
+                class="h-full origin-left bg-main"
+                style={{ transform: `scaleX(${position() / text().length})` }}
               ></div>
             </div>
-            <p
-              id="training-prompt"
-              class="text-2xl leading-relaxed break-words whitespace-pre-wrap sm:text-3xl"
-              aria-label={text()}
-            >
-              <For each={text().split("")}>
-                {(letter, index) => (
-                  <span
-                    aria-hidden="true"
-                    class={cn(
-                      "transition-colors",
-                      typed()[index()] === undefined
-                        ? "text-sub"
-                        : typed()[index()] === letter
-                          ? "text-text"
-                          : "text-error underline",
-                      index() === cursor() && "border-l-2 border-caret",
-                    )}
-                  >
-                    {letter}
-                  </span>
-                )}
-              </For>
-              <span class="text-error underline">
-                {typed().slice(text().length)}
-              </span>
-            </p>
+            <TrainingPrompt
+              text={text()}
+              typed={typed()}
+              cursor={cursor()}
+              paused={paused()}
+            />
             <label
               for="training-input"
               class="mt-6 mb-2 block text-sm text-text"

@@ -11,6 +11,8 @@ Open **train** in the header or `/training`. The standalone `pnpm dev:training` 
 
 Escape, tabbing away, or hiding the tab pauses. Resume excludes paused time from WPM and resets transition timing. Clipboard paste remains disabled for practice. Native input events support keyboard and touch editing. Deletions and undo/redo update the text without counting as new typing attempts; only continuous single-character input contributes transition timing.
 
+The prompt uses a separate, absolutely positioned caret so movement never changes letter widths or line breaks. Caret positioning runs once per animation frame, glides horizontally, and snaps on line changes or resize. Reduced-motion preferences disable the glide. Letter feedback updates immediately, and live statistics reserve their width to keep the layout stable.
+
 ## Recommendation model
 
 The deterministic engine uses error rate and mean valid transition latency relative to the user's own profile. Errors contribute 70% of the score and slower transitions 30%. Only correct transitions between adjacent letters contribute timing, and intervals outside 30–2000 ms are excluded. Keys require five weighted attempts; two- to four-letter sequences require three, each scored against their own sequence-length baseline. Sequence accuracy measures the final-character attempt given a matching prefix; sequence latency measures the final transition, not the duration of the whole sequence. Targets with no measured weakness are omitted.
