@@ -668,6 +668,9 @@ export function TrainingSession(): JSXElement {
                     <span class="text-right text-sm">
                       {(item.accuracy * 100).toFixed(1)}% accuracy
                       <span class="block text-sub">
+                        {item.frequencyMultiplier.toFixed(2)}× frequency boost
+                      </span>
+                      <span class="block text-sub">
                         {item.latencyMs
                           ? `${Math.round(item.latencyMs)} ms`
                           : "collecting rhythm"}
@@ -679,8 +682,25 @@ export function TrainingSession(): JSXElement {
             </div>
           </Show>
           <p class="text-sm text-sub">
-            Based on completed drills here. Targets adapt as you practice; they
-            are suggestions, not a skill rating.
+            Your mistakes and rhythm set the priority. Common English sequences
+            receive up to a 2× boost, so practice focuses on combinations you
+            are more likely to use.
+          </p>
+          <p class="text-sm text-sub">
+            English frequency data:{" "}
+            <a
+              class="underline hover:text-text"
+              href="https://github.com/rspeer/wordfreq"
+            >
+              wordfreq by Robyn Speer
+            </a>{" "}
+            ·{" "}
+            <a
+              class="underline hover:text-text"
+              href="https://creativecommons.org/licenses/by-sa/4.0/"
+            >
+              CC BY-SA 4.0
+            </a>
           </p>
         </section>
       </div>

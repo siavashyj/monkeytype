@@ -1,3 +1,5 @@
+import { englishFrequencyMultiplier } from "./frequency";
+
 export const PROFILE_VERSION = 1 as const;
 
 const MIN_KEY_ATTEMPTS = 5;
@@ -57,6 +59,7 @@ export type RankedTarget = {
   latencyMs: number;
   attempts: number;
   score: number;
+  frequencyMultiplier: number;
 };
 
 const EMPTY_STAT = (): Stat => ({
@@ -347,8 +350,13 @@ function relativeLatencySignal(latencyMs: number, baseline: number): number {
   return clamp((latencyMs - baseline) / Math.max(100, baseline), 0, 1);
 }
 
-export function rankTargets(profile: TrainingProfile): RankedTarget[] {
-  const ranked: RankedTarget[] = [];
+export function rankTargets(
+  profile: TrainingProfile,
+  frequencyMultiplierFor: (
+    target: string,
+  ) => number = englishFrequencyMultiplier,
+): RankedTarget[] {
+  const ranked: Omit<RankedTarget, "frequencyMultiplier">[] = [];
   const keyEntries = Object.entries(profile.keys);
   const pairEntries = Object.entries(profile.pairs);
   const tripleEntries = Object.entries(profile.triples ?? {});
@@ -443,6 +451,18 @@ export function rankTargets(profile: TrainingProfile): RankedTarget[] {
 
   return ranked
     .filter((target) => target.score > 0)
+    .map((target) => {
+      const frequencyMultiplier = clamp(
+        finiteOr(frequencyMultiplierFor(target.target), 1),
+        1,
+        2,
+      );
+      return {
+        ...target,
+        frequencyMultiplier,
+        score: target.score * frequencyMultiplier,
+      };
+    })
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
       if (right.accuracy !== left.accuracy) {

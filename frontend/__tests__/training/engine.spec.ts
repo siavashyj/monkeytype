@@ -4,11 +4,15 @@ import {
   generateDrill,
   mergeSession,
   parseProfile,
-  rankTargets,
+  rankTargets as rankWithFrequency,
   recordAttempt,
   type Stat,
   type SessionSummary,
 } from "../../src/ts/training/engine";
+
+const rankTargets = (
+  profile: ReturnType<typeof createProfile>,
+): ReturnType<typeof rankWithFrequency> => rankWithFrequency(profile, () => 1);
 
 function repeatAttempt(
   profile: ReturnType<typeof createProfile>,

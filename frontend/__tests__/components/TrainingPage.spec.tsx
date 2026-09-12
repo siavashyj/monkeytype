@@ -437,6 +437,7 @@ describe("TrainingSession", () => {
     expect(
       screen.getByText(/3-letter · 6 weighted samples/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/× frequency boost/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("the");
