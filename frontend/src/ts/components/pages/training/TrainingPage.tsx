@@ -12,6 +12,7 @@ import english from "../../../../../static/languages/english_1k.json";
 import {
   createProfile,
   generateDrill,
+  isWordPairTarget,
   mergeSession,
   parseProfile,
   rankTargets,
@@ -19,15 +20,22 @@ import {
   type SessionSummary,
 } from "../../../training/engine";
 import { getTextInsertion } from "../../../training/input";
+import { createWordPairTracker } from "../../../training/word-pairs";
 import { cn } from "../../../utils/cn";
 import { Button } from "../../common/Button";
 import { Fa } from "../../common/Fa";
 import { TrainingPrompt } from "./TrainingPrompt";
 
-const vocabulary = english.words.map((word) => word.toLowerCase());
 const storageKey = "monkeytype.smartTraining.v1";
 const diagnostic =
   "the quick brown fox jumps over the lazy dog then we write each word with care and keep a steady rhythm when learning something new";
+const vocabulary = [
+  ...new Set([
+    ...english.words.map((word) => word.toLowerCase()),
+    ...diagnostic.split(" "),
+  ]),
+];
+const vocabularySet = new Set(vocabulary);
 
 export function TrainingSession(): JSXElement {
   const [storageNotice, setStorageNotice] = createSignal("");
@@ -70,18 +78,24 @@ export function TrainingSession(): JSXElement {
   const [drillTargets, setDrillTargets] = createSignal<string[]>([]);
   let input: HTMLTextAreaElement | undefined;
   let session = createProfile();
+  let trackWordPairs = createWordPairTracker("");
   let activeSince: number | null = null;
   let activeTime = 0;
   let lastKey: number | null = null;
   let lastCorrect = false;
   let lastPosition = -1;
   const ranked = createMemo(() => rankTargets(profile()));
+  const recommended = (limit: number): ReturnType<typeof rankTargets> => {
+    const best = ranked().slice(0, limit);
+    const phrase = ranked().find((item) => item.kind === "wordPair");
+    return phrase && !best.includes(phrase)
+      ? [...best.slice(0, -1), phrase]
+      : best;
+  };
   const targets = createMemo(() =>
     mode() === "manual"
       ? selected()
-      : ranked()
-          .slice(0, 3)
-          .map((item) => item.target),
+      : recommended(3).map((item) => item.target),
   );
   const accuracy = () =>
     attempts() ? (100 * (attempts() - errors())) / attempts() : 100;
@@ -131,6 +145,7 @@ export function TrainingSession(): JSXElement {
         ? diagnostic.split(" ")
         : generateDrill(vocabulary, chosen, count());
     setText(words.join(" "));
+    trackWordPairs = createWordPairTracker(words.join(" "));
     setDrillTargets(chosen);
     setTyped("");
     setCursor(0);
@@ -225,6 +240,12 @@ export function TrainingSession(): JSXElement {
               continuous && lastKey !== null ? now - lastKey : undefined,
           });
         }
+        trackWordPairs(
+          session,
+          index,
+          character,
+          continuous && lastKey !== null ? now - lastKey : undefined,
+        );
         setAttempts((value) => value + 1);
         if (!correct) setErrors((value) => value + 1);
         lastKey = now;
@@ -277,13 +298,16 @@ export function TrainingSession(): JSXElement {
 
   const addTarget = (event: SubmitEvent): void => {
     event.preventDefault();
-    const target = manual().trim().toLowerCase();
-    if (
-      !/^[a-z]{1,4}$/.test(target) ||
-      !vocabulary.some((word) => word.includes(target))
-    ) {
+    const target = manual().trim().toLowerCase().replace(/\s+/g, " ");
+    const validSequence =
+      /^[a-z]{1,4}$/.test(target) &&
+      vocabulary.some((word) => word.includes(target));
+    const validPhrase =
+      isWordPairTarget(target) &&
+      target.split(" ").every((word) => vocabularySet.has(word));
+    if (!validSequence && !validPhrase) {
       setNotice(
-        "Choose a key or a 2–4-letter sequence found in an English word.",
+        "Choose a key, a 2–4-letter sequence, or two words from the practice vocabulary.",
       );
       return;
     }
@@ -362,7 +386,7 @@ export function TrainingSession(): JSXElement {
               {mode() === "diagnostic"
                 ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
-                  ? "Choose up to three keys or 2–4-letter sequences below. Your drill mixes focused words with everyday words."
+                  ? "Choose up to three keys, letter sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
                   : targets().length
                     ? `Practice ${targets().join(", ")} with a drill based on your recent accuracy and rhythm.`
                     : "Complete a diagnostic or a mixed drill so we can find useful practice targets."}
@@ -592,16 +616,16 @@ export function TrainingSession(): JSXElement {
               onSubmit={addTarget}
             >
               <label for="training-target" class="text-sm">
-                key or sequence
+                key, sequence, or word pair
               </label>
               <input
                 id="training-target"
                 value={manual()}
-                maxLength={4}
+                maxLength={61}
                 disabled={running()}
                 onInput={(event) => setManual(event.currentTarget.value)}
-                placeholder="tion"
-                class="w-20 rounded bg-sub-alt p-2 text-text"
+                placeholder="of the"
+                class="w-48 rounded bg-sub-alt p-2 text-text"
               />
               <Button text="add target" type="submit" disabled={running()} />
               <For each={selected()}>
@@ -635,22 +659,23 @@ export function TrainingSession(): JSXElement {
                 </p>
                 <p class="mt-2 text-sm text-sub">
                   Recommendations appear after at least five attempts for a key
-                  or three for a 2–4-letter sequence. We look for errors first,
-                  then slower transitions.
+                  or three for a 2–4-letter sequence. Word pairs need three
+                  weighted encounters. We look for errors first, then slower
+                  transitions.
                 </p>
               </div>
             }
           >
             <div class="grid gap-2">
-              <For each={ranked().slice(0, 5)}>
+              <For each={recommended(5)}>
                 {(item) => (
                   <button
                     type="button"
                     disabled={running()}
                     onClick={() => choose(item.target)}
-                    class="flex items-center justify-between gap-3 rounded bg-sub-alt p-3 text-left text-text hover:text-main focus-visible:outline-2 focus-visible:outline-main"
+                    class="flex flex-wrap items-center justify-between gap-3 rounded bg-sub-alt p-3 text-left text-text hover:text-main focus-visible:outline-2 focus-visible:outline-main"
                   >
-                    <span class="flex items-center gap-3">
+                    <span class="flex min-w-0 flex-wrap items-center gap-3">
                       <span class="min-w-10 text-xl text-main">
                         {item.target}
                       </span>
@@ -661,14 +686,21 @@ export function TrainingSession(): JSXElement {
                             ? "2-letter"
                             : item.kind === "triple"
                               ? "3-letter"
-                              : "4-letter"}{" "}
-                        · {Math.round(item.attempts)} weighted samples
+                              : item.kind === "quad"
+                                ? "4-letter"
+                                : "word pair"}{" "}
+                        ·{" "}
+                        {item.kind === "wordPair"
+                          ? `${(item.occurrences ?? 0).toFixed(1)} weighted encounters`
+                          : `${Math.round(item.attempts)} weighted samples`}
                       </span>
                     </span>
                     <span class="text-right text-sm">
                       {(item.accuracy * 100).toFixed(1)}% accuracy
                       <span class="block text-sub">
-                        {item.frequencyMultiplier.toFixed(2)}× frequency boost
+                        {item.kind === "wordPair"
+                          ? "based on your typing"
+                          : `${item.frequencyMultiplier.toFixed(2)}× frequency boost`}
                       </span>
                       <span class="block text-sub">
                         {item.latencyMs
@@ -682,9 +714,9 @@ export function TrainingSession(): JSXElement {
             </div>
           </Show>
           <p class="text-sm text-sub">
-            Your mistakes and rhythm set the priority. Common English sequences
-            receive up to a 2× boost, so practice focuses on combinations you
-            are more likely to use.
+            Your mistakes and rhythm set the priority. Common English letter
+            sequences receive up to a 2× boost, so practice focuses on
+            combinations you are more likely to use.
           </p>
           <p class="text-sm text-sub">
             English frequency data:{" "}

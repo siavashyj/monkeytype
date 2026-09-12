@@ -386,7 +386,7 @@ describe("TrainingSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
 
     const targetInput = screen.getByRole("textbox", {
-      name: "key or sequence",
+      name: "key, sequence, or word pair",
     });
     const start = screen.getByRole("button", { name: "start training" });
     expect(start).toBeDisabled();
@@ -394,7 +394,7 @@ describe("TrainingSession", () => {
     fireEvent.input(targetInput, { target: { value: "qx" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Choose a key or a 2–4-letter sequence found in an English word.",
+      "Choose a key, a 2–4-letter sequence, or two words from the practice vocabulary.",
     );
     expect(start).toBeDisabled();
 
@@ -403,7 +403,7 @@ describe("TrainingSession", () => {
     expect(screen.getByRole("button", { name: "th ×" })).toBeInTheDocument();
     expect(start).not.toBeDisabled();
 
-    expect(targetInput).toHaveAttribute("maxlength", "4");
+    expect(targetInput).toHaveAttribute("maxlength", "61");
     fireEvent.input(targetInput, { target: { value: "THE" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("button", { name: "the ×" })).toBeInTheDocument();
@@ -504,5 +504,104 @@ describe("TrainingSession", () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("quic");
+  });
+  it("keeps phrase errors after native corrections and saves only one encounter", () => {
+    renderTraining();
+    const input = startDiagnostic();
+    const text = promptText();
+    typeText(input, "thex");
+    keyDown(input, "Backspace");
+    typeText(input, text.slice(3));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      wordPairs: Record<
+        string,
+        { attempts: number; errors: number; occurrences: number }
+      >;
+    };
+    expect(stored.wordPairs["the quick"]).toMatchObject({
+      attempts: 10,
+      errors: 1,
+      occurrences: 1,
+    });
+    cleanup();
+    renderTraining();
+    expect(JSON.parse(localStorage.getItem(storageKey) ?? "null")).toEqual(
+      stored,
+    );
+  });
+
+  it("accepts exact word pairs as manual targets and preserves their adjacency in drills", () => {
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
+    const targetInput = screen.getByRole("textbox", {
+      name: "key, sequence, or word pair",
+    });
+    fireEvent.input(targetInput, { target: { value: "  OF   THE  " } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(
+      screen.getByRole("button", { name: "of the ×" }),
+    ).toBeInTheDocument();
+    fireEvent.input(targetInput, { target: { value: "zzzzzz the" } });
+    fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    expect(
+      screen.queryByRole("button", { name: "zzzzzz the ×" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    const text = promptText();
+    expect(text).toContain("of the");
+    expect(text.split(" ")).toHaveLength(25);
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Typing practice",
+    });
+    typeText(input, text.replaceAll("of the", "of thx"));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      wordPairs: Record<string, { occurrences: number; errors: number }>;
+      sessions: { targets: string[] }[];
+    };
+    expect(stored.wordPairs["of the"]?.occurrences).toBeGreaterThanOrEqual(3);
+    expect(stored.wordPairs["of the"]?.errors).toBe(
+      stored.wordPairs["of the"]?.occurrences,
+    );
+    expect(stored.sessions[0]?.targets).toEqual(["of the"]);
+    expect(
+      screen.getAllByText(/word pair · .* weighted encounters/).length,
+    ).toBeGreaterThan(0);
+  });
+  it("includes an observed weak word pair alongside higher-scoring letter targets", () => {
+    const stat = {
+      attempts: 10,
+      errors: 8,
+      latencySamples: 2,
+      totalLatency: 200,
+    };
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        keys: { a: stat, b: stat, c: stat },
+        pairs: {},
+        triples: {},
+        quads: {},
+        wordPairs: {
+          "of the": {
+            attempts: 18,
+            errors: 1,
+            latencySamples: 17,
+            totalLatency: 1700,
+            occurrences: 3,
+          },
+        },
+        sessions: [],
+      }),
+    );
+    renderTraining();
+    expect(
+      screen.getByText(/word pair · 3.0 weighted encounters/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    expect(promptText()).toContain("of the");
   });
 });

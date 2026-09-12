@@ -1,5 +1,7 @@
 import { englishFrequencyMultiplier } from "./frequency";
 
+export { generateDrill } from "./drill";
+
 export const PROFILE_VERSION = 1 as const;
 
 const MIN_KEY_ATTEMPTS = 5;
@@ -22,6 +24,8 @@ export type Stat = {
   latencySamples: number;
 };
 
+export type WordPairStat = Stat & { occurrences: number };
+
 export type SessionKind = "diagnostic" | "adaptive" | "manual";
 
 export type SessionSummary = {
@@ -40,6 +44,7 @@ export type TrainingProfile = {
   pairs: Record<string, Stat>;
   triples: Record<string, Stat>;
   quads: Record<string, Stat>;
+  wordPairs: Record<string, WordPairStat>;
   sessions: SessionSummary[];
 };
 
@@ -54,12 +59,13 @@ export type Attempt = {
 
 export type RankedTarget = {
   target: string;
-  kind: "key" | "pair" | "triple" | "quad";
+  kind: "key" | "pair" | "triple" | "quad" | "wordPair";
   accuracy: number;
   latencyMs: number;
   attempts: number;
   score: number;
   frequencyMultiplier: number;
+  occurrences?: number;
 };
 
 const EMPTY_STAT = (): Stat => ({
@@ -263,6 +269,7 @@ export function createProfile(): TrainingProfile {
     pairs: {},
     triples: {},
     quads: {},
+    wordPairs: {},
     sessions: [],
   };
 }
@@ -306,6 +313,61 @@ export function recordAttempt(
   if (quad !== null) {
     recordInto(statFor(profile.quads, quad), isError, attempt.latencyMs);
   }
+}
+
+export function isWordPairTarget(target: string): boolean {
+  return /^[a-z]{1,30} [a-z]{1,30}$/.test(target);
+}
+
+export function recordWordPairAttempt(
+  profile: TrainingProfile,
+  attempt: {
+    target: string;
+    expected: string;
+    actual: string;
+    latencyMs?: number;
+    completed: boolean;
+  },
+): void {
+  if (!isWordPairTarget(attempt.target) || !/^[a-z ]$/.test(attempt.expected)) {
+    return;
+  }
+  const stat = profile.wordPairs[attempt.target] ?? {
+    ...EMPTY_STAT(),
+    occurrences: 0,
+  };
+  recordInto(stat, attempt.expected !== attempt.actual, attempt.latencyMs);
+  if (attempt.completed) {
+    stat.occurrences = Math.min(MAX_STAT_VALUE, stat.occurrences + 1);
+  }
+  profile.wordPairs[attempt.target] = stat;
+}
+
+function cloneWordPairs(input: unknown): Record<string, WordPairStat> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return {};
+  }
+  const result: Record<string, WordPairStat> = {};
+  const entries: [string, WordPairStat][] = [];
+  for (const [target, value] of Object.entries(input)) {
+    if (!isWordPairTarget(target)) continue;
+    const stat = boundedStat(value);
+    if (!stat) continue;
+    const occurrences = clamp(
+      finiteOr((value as Partial<WordPairStat>).occurrences, 0),
+      0,
+      stat.attempts,
+    );
+    entries.push([target, { ...stat, occurrences }]);
+  }
+  entries.sort(
+    ([, left], [, right]) =>
+      right.occurrences - left.occurrences || right.attempts - left.attempts,
+  );
+  for (const [target, stat] of entries.slice(0, MAX_TARGETS)) {
+    result[target] = stat;
+  }
+  return result;
 }
 
 type Baseline = {
@@ -449,11 +511,35 @@ export function rankTargets(
     });
   }
 
+  const wordPairEntries = Object.entries(profile.wordPairs ?? {}).filter(
+    ([, stat]) => stat.occurrences >= 3,
+  );
+  const wordPairBaseline = baselineFor(wordPairEntries, 1);
+  for (const [target, stat] of wordPairEntries) {
+    if (stat.attempts <= 0) continue;
+    const errorRate = stat.errors / stat.attempts;
+    const latencyMs =
+      stat.latencySamples === 0 ? 0 : stat.totalLatency / stat.latencySamples;
+    ranked.push({
+      target,
+      kind: "wordPair",
+      accuracy: 1 - errorRate,
+      latencyMs,
+      attempts: stat.attempts,
+      occurrences: stat.occurrences,
+      score:
+        0.7 * relativeErrorSignal(errorRate, wordPairBaseline.errorRate) +
+        0.3 * relativeLatencySignal(latencyMs, wordPairBaseline.latencyMs),
+    });
+  }
+
   return ranked
     .filter((target) => target.score > 0)
     .map((target) => {
       const frequencyMultiplier = clamp(
-        finiteOr(frequencyMultiplierFor(target.target), 1),
+        target.kind === "wordPair"
+          ? 1
+          : finiteOr(frequencyMultiplierFor(target.target), 1),
         1,
         2,
       );
@@ -473,6 +559,7 @@ export function rankTargets(
       }
       if (left.kind !== right.kind) {
         const kindOrder: Record<RankedTarget["kind"], number> = {
+          wordPair: -1,
           quad: 0,
           triple: 1,
           pair: 2,
@@ -482,100 +569,6 @@ export function rankTargets(
       }
       return left.target.localeCompare(right.target);
     });
-}
-
-function uniqueWords(words: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const word of words) {
-    if (word.length === 0 || seen.has(word)) continue;
-    seen.add(word);
-    result.push(word);
-  }
-  return result;
-}
-
-function randomIndex(random: () => number, length: number): number {
-  if (length <= 1) return 0;
-  const value = random();
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(length - 1, Math.max(0, Math.floor(value * length)));
-}
-
-function pickWord(
-  pool: string[],
-  fallback: string[],
-  previous: string | undefined,
-  random: () => number,
-): string | undefined {
-  const options = pool.length > 0 ? pool : fallback;
-  if (options.length === 0) return undefined;
-
-  const start = randomIndex(random, options.length);
-  for (let offset = 0; offset < options.length; offset++) {
-    const candidate = options[(start + offset) % options.length];
-    if (candidate !== previous) return candidate;
-  }
-
-  // A one-word target pool can still avoid a repeat by borrowing a common
-  // word. If the entire dictionary has one word, repeating is unavoidable.
-  const fallbackOptions = fallback.filter(
-    (candidate) => candidate !== previous,
-  );
-  if (fallbackOptions.length > 0) {
-    return fallbackOptions[randomIndex(random, fallbackOptions.length)];
-  }
-  return options[start] ?? options[0];
-}
-
-/**
- * Builds a short drill from existing language words. Target slots are about
- * 70% of the result; the remaining slots sample the whole word list for
- * coverage. If no word contains a requested target, all slots gracefully use
- * the common pool.
- */
-export function generateDrill(
-  words: string[],
-  targets: string[],
-  count: number,
-  random: () => number = Math.random,
-): string[] {
-  const candidates = uniqueWords(words);
-  if (candidates.length === 0 || count <= 0) return [];
-
-  const normalizedTargets = [
-    ...new Set(targets.filter((target) => target.length > 0)),
-  ];
-  const targetPools = normalizedTargets
-    .map((target) => ({
-      target,
-      words: candidates.filter((word) => word.includes(target)),
-    }))
-    .filter((pool) => pool.words.length > 0);
-  const targetSlots =
-    targetPools.length === 0
-      ? 0
-      : Math.min(count, Math.max(Math.round(count * 0.7), targetPools.length));
-  const result: string[] = [];
-  let targetSlotNumber = 0;
-
-  for (let index = 0; index < count; index++) {
-    const isTargetSlot =
-      targetSlots > 0 &&
-      Math.round(((index + 1) * targetSlots) / count) >
-        Math.round((index * targetSlots) / count);
-    const targetPool =
-      targetPools.length === 0
-        ? undefined
-        : targetPools[targetSlotNumber % targetPools.length];
-    const primary =
-      isTargetSlot && targetPool !== undefined ? targetPool.words : candidates;
-    if (isTargetSlot) targetSlotNumber++;
-    const selected = pickWord(primary, candidates, result.at(-1), random);
-    if (selected !== undefined) result.push(selected);
-  }
-
-  return result;
 }
 
 function mergeStat(
@@ -617,6 +610,7 @@ function cloneProfile(profile: TrainingProfile): TrainingProfile {
   normalized.pairs = cloneStats(profile.pairs);
   normalized.triples = cloneStats(profile.triples ?? {});
   normalized.quads = cloneStats(profile.quads ?? {});
+  normalized.wordPairs = cloneWordPairs(profile.wordPairs);
   normalized.sessions = profile.sessions
     .map((summary) => boundedSummary(summary))
     .filter((summary): summary is SessionSummary => summary !== null)
@@ -653,6 +647,22 @@ export function mergeSession(
   mergeStats(merged.pairs, session.pairs);
   mergeStats(merged.triples, session.triples);
   mergeStats(merged.quads, session.quads);
+  for (const target of new Set([
+    ...Object.keys(merged.wordPairs),
+    ...Object.keys(session.wordPairs),
+  ])) {
+    const previous = merged.wordPairs[target];
+    const incoming = session.wordPairs[target];
+    merged.wordPairs[target] = {
+      ...mergeStat(previous, incoming),
+      occurrences: Math.min(
+        MAX_STAT_VALUE,
+        (previous?.occurrences ?? 0) * MERGE_DECAY +
+          (incoming?.occurrences ?? 0),
+      ),
+    };
+  }
+  merged.wordPairs = cloneWordPairs(merged.wordPairs);
 
   const bounded = boundedSummary(summary);
   if (bounded !== null) {
@@ -680,6 +690,7 @@ export function parseProfile(raw: string | null): TrainingProfile {
     if (candidate.version !== PROFILE_VERSION) return createProfile();
 
     const profile = createProfile();
+    profile.wordPairs = cloneWordPairs(candidate.wordPairs);
     if (typeof candidate.keys === "object" && candidate.keys !== null) {
       profile.keys = cloneStats(candidate.keys);
     }

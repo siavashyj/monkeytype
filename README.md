@@ -2,7 +2,7 @@
 
 This fork adds **train → smart training** at `/training` while preserving the normal Monkeytype typing test.
 
-- A repeatable English diagnostic, adaptive drills, and up to three manually selected keys or two- to four-letter sequences.
+- A repeatable English diagnostic, adaptive drills, and up to three manually selected keys, two- to four-letter sequences, or consecutive word pairs.
 - Accuracy and transition-time recommendations with a general-English frequency boost, a keyboard focus view, and recent history.
 - Browser-local progress, pause/resume, and natural text editing: type freely, correct with Backspace, and keep a record of mistakes.
 
