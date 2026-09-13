@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createProfile,
   generateDrill,
+  isSequenceTarget,
   mergeSession,
   parseProfile,
   rankTargets as rankWithFrequency,
@@ -47,6 +48,29 @@ const summary: SessionSummary = {
   characters: 240,
   durationMs: 120_000,
 };
+
+describe("isSequenceTarget", () => {
+  it("accepts lowercase keys and bounded sequences with isolated spaces", () => {
+    for (const target of ["a", "ab", "e ", " of", "e of", " a b"]) {
+      expect(isSequenceTarget(target)).toBe(true);
+    }
+  });
+
+  it("rejects unsupported, empty, all-space, and consecutive-space targets", () => {
+    for (const target of [
+      "",
+      " ",
+      "  ",
+      "a  b",
+      " a  ",
+      "abcde",
+      "A ",
+      "a\t",
+    ]) {
+      expect(isSequenceTarget(target)).toBe(false);
+    }
+  });
+});
 
 describe("recordAttempt", () => {
   it("counts every expected input and treats wrong attempts as errors", () => {
@@ -102,7 +126,7 @@ describe("recordAttempt", () => {
     expect(profile.pairs["a"]).toBeUndefined();
   });
 
-  it("records terminal trigram errors and rejects invalid or whitespace context", () => {
+  it("records terminal trigram errors and rejects invalid or inconsistent context", () => {
     const profile = createProfile();
 
     recordAttempt(profile, {
@@ -135,6 +159,13 @@ describe("recordAttempt", () => {
     recordAttempt(profile, {
       expected: "c",
       actual: "c",
+      previous: " ",
+      previousTwo: "a ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
       previous: "a",
       previousTwo: "bc",
       latencyMs: 100,
@@ -150,6 +181,12 @@ describe("recordAttempt", () => {
       attempts: 1,
       errors: 0,
       totalLatency: 80,
+      latencySamples: 1,
+    });
+    expect(profile.triples["a c"]).toEqual({
+      attempts: 1,
+      errors: 0,
+      totalLatency: 100,
       latencySamples: 1,
     });
     expect(profile.triples["bcc"]).toBeUndefined();
@@ -272,7 +309,7 @@ describe("recordAttempt", () => {
     expect(profile.pairs).toEqual({});
   });
 
-  it("limits training targets to lowercase letters", () => {
+  it("keeps key stats letter-only while tracking valid space sequences", () => {
     const profile = createProfile();
 
     recordAttempt(profile, { expected: " ", actual: "x", previous: "a" });
@@ -286,7 +323,143 @@ describe("recordAttempt", () => {
       totalLatency: 0,
       latencySamples: 0,
     });
-    expect(profile.pairs).toEqual({});
+    expect(profile.keys[" "]).toBeUndefined();
+    expect(profile.pairs["a "]).toEqual({
+      attempts: 1,
+      errors: 1,
+      totalLatency: 0,
+      latencySamples: 0,
+    });
+    expect(profile.pairs[" b"]).toEqual({
+      attempts: 1,
+      errors: 1,
+      totalLatency: 0,
+      latencySamples: 0,
+    });
+  });
+
+  it("records leading, internal, and trailing spaces with final-key latency", () => {
+    const profile = createProfile();
+
+    recordAttempt(profile, {
+      expected: " ",
+      actual: "x",
+      previous: "e",
+      latencyMs: 200,
+    });
+    recordAttempt(profile, {
+      expected: " ",
+      actual: " ",
+      previous: "e",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "o",
+      actual: "o",
+      previous: " ",
+      previousTwo: "e ",
+      latencyMs: 120,
+    });
+    recordAttempt(profile, {
+      expected: "f",
+      actual: "f",
+      previous: "o",
+      previousTwo: " o",
+      previousThree: "e o",
+      latencyMs: 130,
+    });
+    recordAttempt(profile, {
+      expected: "b",
+      actual: "x",
+      previous: " ",
+      previousTwo: "a ",
+      previousThree: " a ",
+      latencyMs: 200,
+    });
+    recordAttempt(profile, {
+      expected: "b",
+      actual: "b",
+      previous: " ",
+      previousTwo: "a ",
+      previousThree: " a ",
+      latencyMs: 90,
+    });
+
+    expect(profile.pairs["e "]).toEqual({
+      attempts: 2,
+      errors: 1,
+      totalLatency: 100,
+      latencySamples: 1,
+    });
+    expect(profile.triples["e o"]).toEqual({
+      attempts: 1,
+      errors: 0,
+      totalLatency: 120,
+      latencySamples: 1,
+    });
+    expect(profile.quads["e of"]).toEqual({
+      attempts: 1,
+      errors: 0,
+      totalLatency: 130,
+      latencySamples: 1,
+    });
+    expect(profile.quads[" a b"]).toEqual({
+      attempts: 2,
+      errors: 1,
+      totalLatency: 90,
+      latencySamples: 1,
+    });
+    expect(profile.keys[" "]).toBeUndefined();
+  });
+
+  it("rejects all-space or consecutive-space sequence contexts", () => {
+    const profile = createProfile();
+
+    recordAttempt(profile, {
+      expected: " ",
+      actual: " ",
+      previous: " ",
+      previousTwo: "a ",
+      previousThree: " a ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "b",
+      actual: "b",
+      previous: " ",
+      previousTwo: "  ",
+      previousThree: " a ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "b",
+      actual: "b",
+      previous: " ",
+      previousTwo: "a ",
+      previousThree: "a  ",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
+      previous: "a",
+      previousTwo: "a",
+      latencyMs: 100,
+    });
+    recordAttempt(profile, {
+      expected: "c",
+      actual: "c",
+      previous: "b",
+      previousTwo: "ab",
+      previousThree: "ab",
+      latencyMs: 100,
+    });
+
+    expect(profile.pairs["  "]).toBeUndefined();
+    expect(profile.triples["a  "]).toBeUndefined();
+    expect(profile.quads["a   b"]).toBeUndefined();
+    expect(profile.triples["ac"]).toBeUndefined();
+    expect(profile.quads["abc"]).toBeUndefined();
   });
 
   it("does not use error latency when measuring rhythm", () => {
@@ -368,6 +541,38 @@ describe("rankTargets", () => {
       attempts: 3,
     });
     expect(pair?.accuracy).toBeCloseTo(1 / 3);
+  });
+
+  it("ranks space-inclusive pairs after the same minimum evidence", () => {
+    const profile = createProfile();
+    repeatAttempt(profile, " ", "x", 2, {
+      previous: "e",
+      latencyMs: 120,
+    });
+    repeatAttempt(profile, " ", " ", 1, {
+      previous: "e",
+      latencyMs: 120,
+    });
+    repeatAttempt(profile, "b", "b", 3, {
+      previous: "a",
+      latencyMs: 120,
+    });
+
+    const pair = rankTargets(profile).find(
+      (target) => target.kind === "pair" && target.target === "e ",
+    );
+    expect(pair).toMatchObject({
+      target: "e ",
+      kind: "pair",
+      latencyMs: 120,
+      attempts: 3,
+    });
+    expect(pair?.accuracy).toBeCloseTo(1 / 3);
+    expect(
+      rankWithFrequency(profile).find(
+        (target) => target.kind === "pair" && target.target === "e ",
+      ),
+    ).toMatchObject({ frequencyMultiplier: 1 });
   });
 
   it("requires three trigram observations and uses a separate trigram baseline", () => {
@@ -772,14 +977,39 @@ describe("parseProfile", () => {
       previousThree: "abc",
       latencyMs: 100,
     });
+    repeatAttempt(profile, " ", " ", 3, {
+      previous: "e",
+      latencyMs: 100,
+    });
+    repeatAttempt(profile, "o", "o", 3, {
+      previous: " ",
+      previousTwo: "e ",
+      latencyMs: 100,
+    });
+    repeatAttempt(profile, "f", "f", 3, {
+      previous: "o",
+      previousTwo: " o",
+      previousThree: "e o",
+      latencyMs: 100,
+    });
+    repeatAttempt(profile, "b", "b", 3, {
+      previous: " ",
+      previousTwo: "a ",
+      previousThree: " a ",
+      latencyMs: 100,
+    });
     profile.sessions.push(summary);
 
     const parsed = parseProfile(JSON.stringify(profile));
     parsed.sessions[0]?.targets.push("new");
 
     expect(parsed.keys["a"]).toEqual(profile.keys["a"]);
+    expect(parsed.pairs["e "]).toEqual(profile.pairs["e "]);
     expect(parsed.triples["abc"]).toEqual(profile.triples["abc"]);
+    expect(parsed.triples["e o"]).toEqual(profile.triples["e o"]);
+    expect(parsed.quads["e of"]).toEqual(profile.quads["e of"]);
     expect(parsed.quads["abcd"]).toEqual(profile.quads["abcd"]);
+    expect(parsed.quads[" a b"]).toEqual(profile.quads[" a b"]);
     expect(profile.sessions[0]?.targets).toEqual(["a", "th"]);
   });
 });

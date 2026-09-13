@@ -16,6 +16,8 @@ const MAX_TARGETS = 2_048;
 const MAX_SESSIONS = 50;
 const MAX_SUMMARY_TARGETS = 128;
 const TRAINING_LETTER = /^[a-z]$/;
+const TRAINING_CHARACTER = /^[a-z ]$/;
+const SEQUENCE_TARGET = /^[a-z ]{2,4}$/;
 
 export type Stat = {
   attempts: number;
@@ -144,18 +146,34 @@ function isTrainingLetter(value: string): boolean {
   return typeof value === "string" && TRAINING_LETTER.test(value);
 }
 
+function isTrainingCharacter(value: string): boolean {
+  return typeof value === "string" && TRAINING_CHARACTER.test(value);
+}
+
+/** Returns whether a key or 2-4 character sequence can be trained. */
+export function isSequenceTarget(target: string): boolean {
+  return (
+    typeof target === "string" &&
+    (isTrainingLetter(target) ||
+      (SEQUENCE_TARGET.test(target) &&
+        /[a-z]/.test(target) &&
+        !target.includes("  ")))
+  );
+}
+
 function pairTarget(
   previous: string | undefined,
   expected: string,
 ): string | null {
   if (
     previous === undefined ||
-    !isTrainingLetter(previous) ||
-    !isTrainingLetter(expected)
+    !isTrainingCharacter(previous) ||
+    !isTrainingCharacter(expected)
   ) {
     return null;
   }
-  return `${previous}${expected}`;
+  const target = `${previous}${expected}`;
+  return isSequenceTarget(target) ? target : null;
 }
 
 function tripleTarget(
@@ -164,33 +182,35 @@ function tripleTarget(
   expected: string,
 ): string | null {
   if (
-    previousTwo === undefined ||
-    !/^[a-z]{2}$/.test(previousTwo) ||
-    !isTrainingLetter(expected)
+    previousTwo?.length !== 2 ||
+    !isSequenceTarget(previousTwo) ||
+    !isTrainingCharacter(expected)
   ) {
     return null;
   }
   if (
     previous !== undefined &&
-    (!isTrainingLetter(previous) || !previousTwo.endsWith(previous))
+    (!isTrainingCharacter(previous) || !previousTwo.endsWith(previous))
   ) {
     return null;
   }
-  return `${previousTwo}${expected}`;
+  const target = `${previousTwo}${expected}`;
+  return isSequenceTarget(target) ? target : null;
 }
 
 function quadTarget(attempt: Attempt): string | null {
   const { previousThree, previousTwo, previous, expected } = attempt;
   if (
-    previousThree === undefined ||
-    !/^[a-z]{3}$/.test(previousThree) ||
-    !isTrainingLetter(expected) ||
+    previousThree?.length !== 3 ||
+    !isSequenceTarget(previousThree) ||
+    !isTrainingCharacter(expected) ||
     (previousTwo !== undefined && previousTwo !== previousThree.slice(-2)) ||
     (previous !== undefined && previous !== previousThree.slice(-1))
   ) {
     return null;
   }
-  return `${previousThree}${expected}`;
+  const target = `${previousThree}${expected}`;
+  return isSequenceTarget(target) ? target : null;
 }
 
 function recordInto(
@@ -286,14 +306,16 @@ export function recordAttempt(
   profile: TrainingProfile,
   attempt: Attempt,
 ): void {
-  if (!isTrainingLetter(attempt.expected)) return;
+  if (!isTrainingCharacter(attempt.expected)) return;
 
   const isError = attempt.actual !== attempt.expected;
-  recordInto(
-    statFor(profile.keys, attempt.expected),
-    isError,
-    attempt.latencyMs,
-  );
+  if (isTrainingLetter(attempt.expected)) {
+    recordInto(
+      statFor(profile.keys, attempt.expected),
+      isError,
+      attempt.latencyMs,
+    );
+  }
 
   const pair = pairTarget(attempt.previous, attempt.expected);
   if (pair !== null) {

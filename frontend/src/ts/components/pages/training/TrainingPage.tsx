@@ -13,6 +13,8 @@ import {
   createProfile,
   generateDrill,
   isWordPairTarget,
+  isSequenceTarget,
+  type RankedTarget,
   mergeSession,
   parseProfile,
   rankTargets,
@@ -37,6 +39,27 @@ const vocabulary = [
   ]),
 ];
 const vocabularySet = new Set(vocabulary);
+type PracticeTarget = Pick<RankedTarget, "target" | "kind">;
+const sameTarget = (left: PracticeTarget, right: PracticeTarget): boolean =>
+  left.target === right.target && left.kind === right.kind;
+const targetLabel = (item: PracticeTarget): string =>
+  item.kind === "wordPair" ? item.target : item.target.replaceAll(" ", "␣");
+
+function supportedSequence(target: string): boolean {
+  if (!isSequenceTarget(target)) return false;
+  const parts = target.split(" ");
+  return parts.every((part, index) =>
+    vocabulary.some((word) =>
+      parts.length === 1
+        ? word.includes(part)
+        : index === 0
+          ? word.endsWith(part)
+          : index === parts.length - 1
+            ? word.startsWith(part)
+            : word === part,
+    ),
+  );
+}
 
 export function TrainingSession(): JSXElement {
   const [storageNotice, setStorageNotice] = createSignal("");
@@ -64,7 +87,7 @@ export function TrainingSession(): JSXElement {
       }
     })(),
   );
-  const [selected, setSelected] = createSignal<string[]>([]);
+  const [selected, setSelected] = createSignal<PracticeTarget[]>([]);
   const [manual, setManual] = createSignal("");
   const [count, setCount] = createSignal(25);
   const [text, setText] = createSignal("");
@@ -85,7 +108,7 @@ export function TrainingSession(): JSXElement {
   const [notice, setNotice] = createSignal("");
   const [result, setResult] = createSignal<SessionSummary>();
   const [confirmReset, setConfirmReset] = createSignal(false);
-  const [drillTargets, setDrillTargets] = createSignal<string[]>([]);
+  const [drillTargets, setDrillTargets] = createSignal<PracticeTarget[]>([]);
   let input: HTMLTextAreaElement | undefined;
   let session = createProfile();
   let trackWordPairs = createWordPairTracker("");
@@ -107,9 +130,7 @@ export function TrainingSession(): JSXElement {
       : best;
   };
   const targets = createMemo(() =>
-    mode() === "manual"
-      ? selected()
-      : recommended(3).map((item) => item.target),
+    mode() === "manual" ? selected() : recommended(3),
   );
   const accuracy = () =>
     attempts() ? (100 * (attempts() - errors())) / attempts() : 100;
@@ -157,7 +178,7 @@ export function TrainingSession(): JSXElement {
     setWordPairsEnabled(enabled);
     if (!enabled) {
       setSelected((items) =>
-        items.filter((target) => !isWordPairTarget(target)),
+        items.filter((target) => target.kind !== "wordPair"),
       );
     }
     setManual("");
@@ -210,7 +231,7 @@ export function TrainingSession(): JSXElement {
       date: Date.now(),
       wpm: Math.round(correctCharacters() / 5 / (durationMs / 60000)),
       accuracy: accuracy() / 100,
-      targets: drillTargets(),
+      targets: drillTargets().map((item) => item.target),
       kind: mode(),
       characters: text().length,
       durationMs,
@@ -324,37 +345,48 @@ export function TrainingSession(): JSXElement {
     input?.focus();
   };
 
-  const choose = (target: string): void => {
+  const choose = (target: PracticeTarget): void => {
     if (running()) return;
     setMode("manual");
     setResult(undefined);
     setSelected((values) =>
-      values.includes(target)
-        ? values.filter((value) => value !== target)
+      values.some((value) => sameTarget(value, target))
+        ? values.filter((value) => !sameTarget(value, target))
         : [...values.slice(-2), target],
     );
   };
 
   const addTarget = (event: SubmitEvent): void => {
     event.preventDefault();
-    const target = manual().trim().toLowerCase().replace(/\s+/g, " ");
-    const validSequence =
-      /^[a-z]{1,4}$/.test(target) &&
-      vocabulary.some((word) => word.includes(target));
+    // Keep boundary spaces in short sequences; ␣ also makes them easy to enter.
+    const raw = manual().toLowerCase().replaceAll("␣", " ");
+    const sequence = supportedSequence(raw);
+    const target = sequence ? raw : raw.trim().replace(/\s+/g, " ");
+    const validSequence = sequence || supportedSequence(target);
     const validPhrase =
       isWordPairTarget(target) &&
       target.split(" ").every((word) => vocabularySet.has(word));
-    if (validPhrase && !wordPairsEnabled()) {
+    if (!validSequence && validPhrase && !wordPairsEnabled()) {
       setNotice("Turn on word combinations to add a word pair.");
       return;
     }
     if (!validSequence && !validPhrase) {
       setNotice(
-        "Choose a key, a 2–4-letter sequence, or two words from the practice vocabulary.",
+        "Choose a key, a 2–4-character sequence (spaces allowed), or two words from the practice vocabulary.",
       );
       return;
     }
-    if (!selected().includes(target)) choose(target);
+    const kind: PracticeTarget["kind"] = validSequence
+      ? target.length === 1
+        ? "key"
+        : target.length === 2
+          ? "pair"
+          : target.length === 3
+            ? "triple"
+            : "quad"
+      : "wordPair";
+    const chosen = { target, kind };
+    if (!selected().some((item) => sameTarget(item, chosen))) choose(chosen);
     setManual("");
     setNotice("");
   };
@@ -392,7 +424,7 @@ export function TrainingSession(): JSXElement {
         </div>
         <label
           class="flex items-center gap-2 text-sm text-text"
-          title="Track and practice consecutive word pairs. Change between drills."
+          title="Track and practice whole word pairs. Short sequences containing spaces stay enabled. Change between drills."
         >
           <input
             type="checkbox"
@@ -445,10 +477,10 @@ export function TrainingSession(): JSXElement {
                 ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
                   ? wordPairsEnabled()
-                    ? "Choose up to three keys, letter sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
-                    : "Choose up to three keys or letter sequences below. Your drill mixes focused words with everyday words."
+                    ? "Choose up to three keys, character sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
+                    : "Choose up to three keys or character sequences below. Your drill mixes focused words with everyday words."
                   : targets().length
-                    ? `Practice ${targets().join(", ")} with a drill based on your recent accuracy and rhythm.`
+                    ? `Practice ${targets().map(targetLabel).join(", ")} with a drill based on your recent accuracy and rhythm.`
                     : "Complete a diagnostic or a mixed drill so we can find useful practice targets."}
             </p>
           </div>
@@ -508,7 +540,7 @@ export function TrainingSession(): JSXElement {
             <div class="mb-4 flex justify-between text-sm text-sub">
               <span>
                 {drillTargets().length
-                  ? `focus: ${drillTargets().join(" · ")}`
+                  ? `focus: ${drillTargets().map(targetLabel).join(" · ")}`
                   : "balanced practice"}
               </span>
               <span>
@@ -645,16 +677,22 @@ export function TrainingSession(): JSXElement {
                           type="button"
                           disabled={running()}
                           aria-pressed={
-                            selected().includes(key) && mode() === "manual"
+                            selected().some(
+                              (item) =>
+                                item.kind === "key" && item.target === key,
+                            ) && mode() === "manual"
                           }
                           aria-label={`${key}${stat() ? `, ${Math.round(100 * (1 - (stat()?.errors ?? 0) / (stat()?.attempts ?? 1)))} percent accuracy, ${stat()?.attempts} attempts` : ", no samples"}`}
-                          onClick={() => choose(key)}
+                          onClick={() => choose({ target: key, kind: "key" })}
                           class={cn(
                             "h-10 w-8 rounded border border-bg bg-bg text-sm text-sub transition-colors hover:border-main focus-visible:outline-2 focus-visible:outline-main disabled:cursor-default sm:h-12 sm:w-12 sm:text-base",
                             stat() && "text-text",
                             weak() && "border-main text-main",
                             mode() === "manual" &&
-                              selected().includes(key) &&
+                              selected().some(
+                                (item) =>
+                                  item.kind === "key" && item.target === key,
+                              ) &&
                               "bg-main text-bg",
                           )}
                         >
@@ -669,6 +707,9 @@ export function TrainingSession(): JSXElement {
           </div>
           <p class="text-sm text-sub">
             Highlighted outlines mark suggested keys. Unsampled keys stay dim.
+            Sequences can include spaces: e␣of practices transitions like “bake
+            off”. Enter a space or ␣; short entries (up to four characters) are
+            sequences.
           </p>
           <Show when={mode() === "manual"}>
             <form
@@ -686,14 +727,14 @@ export function TrainingSession(): JSXElement {
                 maxLength={wordPairsEnabled() ? 61 : 4}
                 disabled={running()}
                 onInput={(event) => setManual(event.currentTarget.value)}
-                placeholder={wordPairsEnabled() ? "of the" : "tion"}
+                placeholder={wordPairsEnabled() ? "e␣of or of the" : "e␣of"}
                 class="w-48 rounded bg-sub-alt p-2 text-text"
               />
               <Button text="add target" type="submit" disabled={running()} />
               <For each={selected()}>
                 {(target) => (
                   <Button
-                    text={`${target} ×`}
+                    text={`${targetLabel(target)} ×`}
                     active
                     disabled={running()}
                     onClick={() => choose(target)}
@@ -721,7 +762,7 @@ export function TrainingSession(): JSXElement {
                 </p>
                 <p class="mt-2 text-sm text-sub">
                   Recommendations appear after at least five attempts for a key
-                  or three for a 2–4-letter sequence.{" "}
+                  or three for a 2–4-character sequence.{" "}
                   <Show when={wordPairsEnabled()}>
                     Word pairs need three weighted encounters.{" "}
                   </Show>
@@ -736,22 +777,22 @@ export function TrainingSession(): JSXElement {
                   <button
                     type="button"
                     disabled={running()}
-                    onClick={() => choose(item.target)}
+                    onClick={() => choose(item)}
                     class="flex flex-wrap items-center justify-between gap-3 rounded bg-sub-alt p-3 text-left text-text hover:text-main focus-visible:outline-2 focus-visible:outline-main"
                   >
                     <span class="flex min-w-0 flex-wrap items-center gap-3">
                       <span class="min-w-10 text-xl text-main">
-                        {item.target}
+                        {targetLabel(item)}
                       </span>
                       <span class="text-sm text-sub">
                         {item.kind === "key"
                           ? "key"
                           : item.kind === "pair"
-                            ? "2-letter"
+                            ? "2-character"
                             : item.kind === "triple"
-                              ? "3-letter"
+                              ? "3-character"
                               : item.kind === "quad"
-                                ? "4-letter"
+                                ? "4-character"
                                 : "word pair"}{" "}
                         ·{" "}
                         {item.kind === "wordPair"
@@ -762,7 +803,7 @@ export function TrainingSession(): JSXElement {
                     <span class="text-right text-sm">
                       {(item.accuracy * 100).toFixed(1)}% accuracy
                       <span class="block text-sub">
-                        {item.kind === "wordPair"
+                        {item.kind === "wordPair" || item.target.includes(" ")
                           ? "based on your typing"
                           : `${item.frequencyMultiplier.toFixed(2)}× frequency boost`}
                       </span>
@@ -840,7 +881,7 @@ export function TrainingSession(): JSXElement {
                           {new Date(item.date).toLocaleString()}
                         </span>
                       </td>
-                      <td class="p-3 text-main">
+                      <td class="p-3 whitespace-pre-wrap text-main">
                         {item.targets.join(", ") || "balanced"}
                       </td>
                       <td class="p-3">{item.wpm}</td>

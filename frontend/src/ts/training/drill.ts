@@ -1,9 +1,25 @@
 const PHRASE_TARGET = /^[a-z]+ [a-z]+$/;
+const SEQUENCE_TARGET = /^[a-z ]{2,4}$/;
+
+export type DrillTargetKind = "key" | "pair" | "triple" | "quad" | "wordPair";
+
+export type DrillTarget = Readonly<{
+  target: string;
+  kind: DrillTargetKind;
+}>;
+
+type DrillTargetInput = string | DrillTarget;
+
+type SequencePattern = {
+  parts: string[];
+  candidates: string[][];
+};
 
 type DrillTargetPool = {
   target: string;
   words: string[];
   phrase: boolean;
+  sequence?: SequencePattern;
 };
 
 function uniqueWords(words: string[]): string[] {
@@ -15,6 +31,44 @@ function uniqueWords(words: string[]): string[] {
     result.push(word);
   }
   return result;
+}
+
+function sequenceLengthFor(kind: DrillTargetKind): number | undefined {
+  switch (kind) {
+    case "key":
+      return 1;
+    case "pair":
+      return 2;
+    case "triple":
+      return 3;
+    case "quad":
+      return 4;
+    default:
+      return undefined;
+  }
+}
+
+function isSequenceTarget(target: string, kind: DrillTargetKind): boolean {
+  const length = sequenceLengthFor(kind);
+  if (length === undefined || target.length !== length) return false;
+  if (kind === "key") return /^[a-z]$/.test(target);
+  return (
+    SEQUENCE_TARGET.test(target) &&
+    /[a-z]/.test(target) &&
+    !target.includes("  ")
+  );
+}
+
+function isTypedTarget(value: DrillTargetInput): value is DrillTarget {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    typeof value.target === "string" &&
+    (value.kind === "key" ||
+      value.kind === "pair" ||
+      value.kind === "triple" ||
+      value.kind === "quad" ||
+      value.kind === "wordPair")
+  );
 }
 
 function randomIndex(random: () => number, length: number): number {
@@ -67,6 +121,42 @@ function pickCommonWord(
     return options[randomIndex(random, options.length)];
   }
   return pickWord(candidates, candidates, previous, random);
+}
+
+function pickSequenceWords(
+  pool: DrillTargetPool,
+  previous: string | undefined,
+  random: () => number,
+  history: Map<DrillTargetPool, Set<string>[]>,
+): string[] | undefined {
+  const sequence = pool.sequence;
+  if (sequence === undefined) return undefined;
+
+  const used = history.get(pool) ?? sequence.candidates.map(() => new Set());
+  history.set(pool, used);
+  const result: string[] = [];
+  let prior = previous;
+
+  for (const [index, candidates] of sequence.candidates.entries()) {
+    const withoutPrevious = candidates.filter(
+      (candidate) => candidate !== prior,
+    );
+    const options = withoutPrevious.length > 0 ? withoutPrevious : candidates;
+    if (options.length === 0) return undefined;
+
+    const seen = used[index] ?? new Set<string>();
+    used[index] = seen;
+    const unseen = options.filter((candidate) => !seen.has(candidate));
+    const choices = unseen.length > 0 ? unseen : options;
+    const selected = choices[randomIndex(random, choices.length)];
+    if (selected === undefined) return undefined;
+    result.push(selected);
+    seen.add(selected);
+    if (seen.size >= candidates.length) seen.clear();
+    prior = selected;
+  }
+
+  return result;
 }
 
 function generateLegacyDrill(
@@ -149,6 +239,63 @@ function targetPoolsFor(
   return { plain, phrases };
 }
 
+function sequencePartCandidates(
+  candidates: string[],
+  parts: string[],
+): string[][] | undefined {
+  const result = parts.map((part, index) => {
+    if (parts.length === 1) {
+      return candidates.filter((word) => word.includes(part));
+    }
+    if (index === 0) return candidates.filter((word) => word.endsWith(part));
+    if (index === parts.length - 1) {
+      return candidates.filter((word) => word.startsWith(part));
+    }
+    return candidates.filter((word) => word === part);
+  });
+  return result.every((part) => part.length > 0) ? result : undefined;
+}
+
+function sequencePoolFor(
+  candidates: string[],
+  target: DrillTarget,
+): DrillTargetPool | undefined {
+  if (!isSequenceTarget(target.target, target.kind)) return undefined;
+  const parts = target.target.split(" ");
+  const candidateParts = sequencePartCandidates(candidates, parts);
+  if (candidateParts === undefined) return undefined;
+  return {
+    target: target.target,
+    words: [],
+    phrase: false,
+    sequence: { parts, candidates: candidateParts },
+  };
+}
+
+function wordPairPoolFor(
+  candidates: string[],
+  target: DrillTarget,
+): DrillTargetPool | undefined {
+  if (target.kind !== "wordPair" || !PHRASE_TARGET.test(target.target)) {
+    return undefined;
+  }
+  const [first, second] = target.target.split(" ");
+  if (
+    first === undefined ||
+    second === undefined ||
+    !candidates.includes(first) ||
+    !candidates.includes(second)
+  ) {
+    return undefined;
+  }
+  return { target: target.target, words: [first, second], phrase: true };
+}
+
+function poolWordCount(pool: DrillTargetPool): number {
+  if (pool.sequence !== undefined) return pool.sequence.parts.length;
+  return pool.phrase ? 2 : 1;
+}
+
 function targetEvents(
   pools: DrillTargetPool[],
   targetBudget: number,
@@ -164,7 +311,7 @@ function targetEvents(
     for (let offset = 0; offset < pools.length; offset++) {
       const pool = pools[(poolIndex + offset) % pools.length];
       if (pool === undefined) continue;
-      const size = pool.phrase ? 2 : 1;
+      const size = poolWordCount(pool);
       if (targetWords + size > targetBudget || targetWords + size > count) {
         continue;
       }
@@ -203,7 +350,7 @@ function generatePhraseDrill(
   }
 
   const targetWordCount = events.reduce(
-    (sum, pool) => sum + (pool.phrase ? 2 : 1),
+    (sum, pool) => sum + poolWordCount(pool),
     0,
   );
   const commonWordCount = count - targetWordCount;
@@ -216,6 +363,7 @@ function generatePhraseDrill(
       Math.round((index * commonWordCount) / (events.length + 1)),
   );
   const result: string[] = [];
+  const sequenceHistory = new Map<DrillTargetPool, Set<string>[]>();
 
   for (let eventIndex = 0; eventIndex <= events.length; eventIndex++) {
     const event = events[eventIndex];
@@ -252,7 +400,15 @@ function generatePhraseDrill(
     }
 
     if (event === undefined) continue;
-    if (event.phrase) {
+    if (event.sequence !== undefined) {
+      const selected = pickSequenceWords(
+        event,
+        result.at(-1),
+        random,
+        sequenceHistory,
+      );
+      if (selected !== undefined) result.push(...selected);
+    } else if (event.phrase) {
       // Keep the pair together, including an intentional `had had` pair.
       const first = event.words[0];
       const second = event.words[1];
@@ -268,47 +424,91 @@ function generatePhraseDrill(
 }
 
 /**
- * Builds a drill from words and letter/phrase targets. Letter targets keep
- * the legacy substring behavior. A valid phrase is emitted as its two exact
- * words, never as one token containing a space.
+ * Builds a drill from words and letter/sequence/phrase targets. String
+ * targets retain their legacy substring and exact-phrase behavior. Typed
+ * sequence targets may contain spaces and are emitted as adjacent words.
  */
 export function generateDrill(
   words: string[],
-  targets: string[],
+  targets: readonly DrillTargetInput[],
   count: number,
   random: () => number = Math.random,
 ): string[] {
   const allCandidates = uniqueWords(words);
-  if (allCandidates.length === 0 || count <= 0) return [];
-
-  const normalizedTargets = [
-    ...new Set(targets.filter((target) => target.length > 0)),
-  ];
-  const { plain, phrases } = targetPoolsFor(
-    allCandidates.filter((word) => !/\s/.test(word)),
-    normalizedTargets,
-  );
-
-  // Keep the old algorithm and random-call sequence untouched when no
-  // recognized phrase can participate. Unknown/invalid phrases are common
-  // pool targets by design.
-  if (phrases.length === 0) {
-    return generateLegacyDrill(
-      allCandidates,
-      normalizedTargets.filter((target) => !/\s/.test(target)),
-      count,
-      random,
-    );
+  if (allCandidates.length === 0 || count <= 0 || !Number.isFinite(count)) {
+    return [];
   }
 
-  // Keep malformed numeric counts from entering the phrase scheduler. The
-  // legacy branch above intentionally retains its existing loop behavior.
-  const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
-  if (safeCount === 0) return [];
+  const stringTargets = [
+    ...new Set(
+      targets.filter(
+        (target): target is string =>
+          typeof target === "string" && target.length > 0,
+      ),
+    ),
+  ];
+  const typedTargets = [
+    ...new Map(
+      targets
+        .filter(isTypedTarget)
+        .filter((target) => target.target.length > 0)
+        .map((target) => [`${target.kind}\u0000${target.target}`, target]),
+    ).values(),
+  ];
   const phraseCandidates = allCandidates.filter((word) => !/\s/.test(word));
+  const { plain: stringPlain, phrases } = targetPoolsFor(
+    phraseCandidates,
+    stringTargets,
+  );
+  const typedPlainTargets = typedTargets
+    .filter(
+      (target) =>
+        target.kind !== "wordPair" &&
+        !target.target.includes(" ") &&
+        isSequenceTarget(target.target, target.kind),
+    )
+    .map((target) => target.target);
+  const { plain: typedPlainPools } = targetPoolsFor(
+    phraseCandidates,
+    typedPlainTargets,
+  );
+  const plain = [
+    ...stringPlain,
+    ...typedPlainPools.filter(
+      (pool) =>
+        !stringPlain.some((existing) => existing.target === pool.target),
+    ),
+  ];
+  const typedSequencePools = typedTargets
+    .filter(
+      (target) => target.kind !== "wordPair" && target.target.includes(" "),
+    )
+    .map((target) => sequencePoolFor(phraseCandidates, target))
+    .filter((pool): pool is DrillTargetPool => pool !== undefined);
+  const typedPhrasePools = typedTargets
+    .filter((target) => target.kind === "wordPair")
+    .map((target) => wordPairPoolFor(phraseCandidates, target))
+    .filter((pool): pool is DrillTargetPool => pool !== undefined)
+    .filter((pool) => !phrases.some((phrase) => phrase.target === pool.target));
+
+  const spacePools = [...typedPhrasePools, ...typedSequencePools];
+  const legacyTargets = [
+    ...stringTargets.filter((target) => !/\s/.test(target)),
+    ...typedPlainTargets,
+  ];
+
+  // Keep the old algorithm and random-call sequence untouched when no
+  // recognized space target can participate. Unknown/invalid phrases and
+  // unsupported typed targets are common-pool inputs by design.
+  if (phrases.length === 0 && spacePools.length === 0) {
+    return generateLegacyDrill(allCandidates, legacyTargets, count, random);
+  }
+
+  const safeCount = Math.max(0, Math.floor(count));
+  if (safeCount === 0) return [];
   return generatePhraseDrill(
     phraseCandidates,
-    [...plain, ...phrases],
+    [...plain, ...phrases, ...spacePools],
     safeCount,
     random,
   );

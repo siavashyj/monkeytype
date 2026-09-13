@@ -99,11 +99,11 @@ describe("TrainingSession", () => {
       errors: 0,
     });
     expect(
-      Object.keys(stored.triples).every((target) => /^[a-z]{3}$/.test(target)),
+      Object.keys(stored.triples).every((target) => /^[a-z ]{3}$/.test(target)),
     ).toBe(true);
     expect(stored.quads["quic"]).toMatchObject({ attempts: 1, errors: 0 });
     expect(
-      Object.keys(stored.quads).every((target) => /^[a-z]{4}$/.test(target)),
+      Object.keys(stored.quads).every((target) => /^[a-z ]{4}$/.test(target)),
     ).toBe(true);
     expect(stored.sessions).toHaveLength(1);
     expect(stored.sessions[0]).toMatchObject({
@@ -394,7 +394,7 @@ describe("TrainingSession", () => {
     fireEvent.input(targetInput, { target: { value: "qx" } });
     fireEvent.click(screen.getByRole("button", { name: "add target" }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Choose a key, a 2–4-letter sequence, or two words from the practice vocabulary.",
+      "Choose a key, a 2–4-character sequence (spaces allowed), or two words from the practice vocabulary.",
     );
     expect(start).toBeDisabled();
 
@@ -435,7 +435,7 @@ describe("TrainingSession", () => {
     );
     renderTraining();
     expect(
-      screen.getByText(/3-letter · 6 weighted samples/),
+      screen.getByText(/3-character · 6 weighted samples/),
     ).toBeInTheDocument();
     expect(screen.getByText(/× frequency boost/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
@@ -500,7 +500,7 @@ describe("TrainingSession", () => {
     cleanup();
     renderTraining();
     expect(
-      screen.getByText(/4-letter · 3 weighted samples/),
+      screen.getByText(/4-character · 3 weighted samples/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("quic");
@@ -690,5 +690,81 @@ describe("TrainingSession", () => {
     };
     expect(stored.wordPairs).toEqual({});
     expect(stored.sessions[0]?.targets).toEqual(["th"]);
+  });
+  it("retains corrected space errors and crossing sequences while word pairs are disabled", () => {
+    localStorage.setItem(
+      "monkeytype.smartTraining.wordPairsEnabled.v1",
+      "false",
+    );
+    renderTraining();
+    const input = startDiagnostic();
+    const text = promptText();
+    typeText(input, "thex");
+    keyDown(input, "Backspace");
+    typeText(input, text.slice(3));
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      keys: Record<string, unknown>;
+      pairs: Record<string, { errors: number }>;
+      quads: Record<string, { attempts: number; errors: number }>;
+      wordPairs: unknown;
+    };
+    expect(stored.pairs["e "]?.errors).toBe(1);
+    expect(stored.quads["the "]?.errors).toBe(1);
+    expect(stored.quads["e qu"]).toMatchObject({ attempts: 1, errors: 0 });
+    expect(stored.keys[" "]).toBeUndefined();
+    expect(stored.wordPairs).toEqual({});
+  });
+
+  it("accepts visible and literal boundary spaces and keeps sequences when word pairs are disabled", () => {
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
+    const targetInput = screen.getByRole("textbox", {
+      name: "key, sequence, or word pair",
+    });
+    for (const value of ["e␣of", "e ", " of"]) {
+      fireEvent.input(targetInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    }
+    fireEvent.click(screen.getByRole("switch", { name: "Word combinations" }));
+    for (const label of ["e␣of ×", "e␣ ×", "␣of ×"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    const text = promptText();
+    expect(text).toContain("e of");
+    expect(text.split(" ")).toHaveLength(25);
+  });
+
+  it("restores and practices a short space sequence separately from an identical word pair", () => {
+    const stat = {
+      attempts: 10,
+      errors: 5,
+      latencySamples: 5,
+      totalLatency: 500,
+    };
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        keys: {},
+        pairs: {},
+        triples: {},
+        quads: { "a be": stat },
+        wordPairs: { "a be": { ...stat, occurrences: 3 } },
+        sessions: [],
+      }),
+    );
+    renderTraining();
+    fireEvent.click(screen.getByRole("switch", { name: "Word combinations" }));
+    expect(screen.queryByText(/word pair ·/)).not.toBeInTheDocument();
+    const recommendation = screen.getByRole("button", {
+      name: /a␣be.*4-character/,
+    });
+    fireEvent.click(recommendation);
+    expect(screen.getByRole("button", { name: "a␣be ×" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    expect(promptText()).toContain("a be");
+    expect(promptText().split(" ")).toHaveLength(25);
   });
 });
