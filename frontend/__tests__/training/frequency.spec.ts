@@ -7,6 +7,7 @@ import {
   type Stat,
 } from "../../src/ts/training/engine";
 import { englishFrequencyMultiplier } from "../../src/ts/training/frequency";
+import top200 from "../../src/ts/training/data/english-top-200.json";
 import frequencies from "../../src/ts/training/data/english-sequence-frequency.json";
 
 const stat = (errors = 2): Stat => ({
@@ -17,6 +18,17 @@ const stat = (errors = 2): Stat => ({
 });
 
 describe("English frequency priority", () => {
+  it("includes frequency weights for every letter sequence in the top200 vocabulary", () => {
+    for (const word of top200.words) {
+      for (let length = 1; length <= Math.min(word.length, 4); length++) {
+        for (let index = 0; index <= word.length - length; index++) {
+          expect(
+            englishFrequencyMultiplier(word.slice(index, index + length)),
+          ).toBeGreaterThan(1);
+        }
+      }
+    }
+  });
   it("uses bounded logarithmic boosts from English frequencies at each length", () => {
     for (const target of Object.keys(frequencies.perMillion)) {
       const boost = englishFrequencyMultiplier(target);

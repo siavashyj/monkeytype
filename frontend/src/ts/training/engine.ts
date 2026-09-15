@@ -36,6 +36,7 @@ export type SessionSummary = {
   accuracy: number;
   targets: string[];
   kind: SessionKind;
+  vocabulary?: "english1k" | "top200";
   characters: number;
   durationMs: number;
 };
@@ -273,6 +274,10 @@ function boundedSummary(value: unknown): SessionSummary | null {
     accuracy: clamp(finiteOr(candidate.accuracy, 0), 0, 1),
     targets,
     kind: candidate.kind,
+    ...(candidate.vocabulary === "english1k" ||
+    candidate.vocabulary === "top200"
+      ? { vocabulary: candidate.vocabulary }
+      : {}),
     characters: Math.max(0, Math.floor(finiteOr(candidate.characters, 0))),
     durationMs: Math.max(0, finiteOr(candidate.durationMs, 0)),
   };

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingSession } from "../../src/ts/components/pages/training/TrainingPage";
+import top200 from "../../src/ts/training/data/english-top-200.json";
 
 const storageKey = "monkeytype.smartTraining.v1";
 
@@ -766,5 +767,123 @@ describe("TrainingSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "start training" }));
     expect(promptText()).toContain("a be");
     expect(promptText().split(" ")).toHaveLength(25);
+  });
+  it("remembers top-200 vocabulary and keeps repeatable diagnostics within it", () => {
+    expect(top200.words).toHaveLength(200);
+    expect(new Set(top200.words).size).toBe(200);
+    renderTraining();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Training vocabulary" }),
+      { target: { value: "top200" } },
+    );
+    cleanup();
+    renderTraining();
+    const selector = screen.getByRole("combobox", {
+      name: "Training vocabulary",
+    });
+    expect(selector).toHaveValue("top200");
+    const input = startDiagnostic();
+    const text = promptText();
+    expect(text.split(" ")).toHaveLength(25);
+    expect(text.split(" ").every((word) => top200.words.includes(word))).toBe(
+      true,
+    );
+    expect(selector).toBeDisabled();
+    keyDown(input, "Escape");
+    expect(selector).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "resume" }));
+    typeText(input, text);
+    keyDown(input, "Enter");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+      sessions: { vocabulary: string }[];
+    };
+    expect(stored.sessions[0]?.vocabulary).toBe("top200");
+    cleanup();
+    renderTraining();
+    expect(screen.getByText("top 200")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "diagnostic" }));
+    startDiagnostic();
+    expect(promptText()).toBe(text);
+  });
+
+  it("limits adaptive recommendations and all generated words without deleting saved targets", () => {
+    const stat = {
+      attempts: 10,
+      errors: 5,
+      latencySamples: 5,
+      totalLatency: 500,
+    };
+    const saved = JSON.stringify({
+      version: 1,
+      keys: {},
+      pairs: { th: stat },
+      triples: {},
+      quads: { quic: stat, "e of": stat, into: stat },
+      wordPairs: { "quick brown": { ...stat, occurrences: 3 } },
+      sessions: [],
+    });
+    localStorage.setItem(storageKey, saved);
+    renderTraining();
+    const selector = screen.getByRole("combobox", {
+      name: "Training vocabulary",
+    });
+    fireEvent.change(selector, { target: { value: "top200" } });
+    expect(screen.queryByText("quic")).not.toBeInTheDocument();
+    expect(screen.queryByText("quick brown")).not.toBeInTheDocument();
+    expect(screen.getByText("e␣of")).toBeInTheDocument();
+    expect(screen.getByText("into")).toBeInTheDocument();
+    expect(localStorage.getItem(storageKey)).toBe(saved);
+    fireEvent.click(screen.getByRole("button", { name: "adaptive" }));
+    fireEvent.click(screen.getByRole("button", { name: "50" }));
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    const words = promptText().split(" ");
+    expect(words).toHaveLength(50);
+    expect(words.every((word) => top200.words.includes(word))).toBe(true);
+    expect(promptText()).toContain("e of");
+    fireEvent.click(screen.getByRole("button", { name: "end drill" }));
+    fireEvent.change(selector, { target: { value: "english1k" } });
+    expect(screen.getByText("quic")).toBeInTheDocument();
+    expect(screen.queryByText("into")).not.toBeInTheDocument();
+    expect(screen.getByText("quick brown")).toBeInTheDocument();
+  });
+
+  it("removes unavailable manual targets and keeps space and word-pair drills in the top200", () => {
+    renderTraining();
+    fireEvent.click(screen.getByRole("button", { name: "choose targets" }));
+    const targetInput = screen.getByRole("textbox", {
+      name: "key, sequence, or word pair",
+    });
+    for (const value of ["quic", "quick brown", "th"]) {
+      fireEvent.input(targetInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    }
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Training vocabulary" }),
+      { target: { value: "top200" } },
+    );
+    expect(
+      screen.queryByRole("button", { name: "quic ×" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "quick brown ×" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "th ×" })).toBeInTheDocument();
+    for (const value of ["quic", "quick brown"]) {
+      fireEvent.input(targetInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "add target" }));
+      expect(
+        screen.queryByRole("button", { name: `${value} ×` }),
+      ).not.toBeInTheDocument();
+    }
+    for (const value of ["e of", "of the"]) {
+      fireEvent.input(targetInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "add target" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "start training" }));
+    const words = promptText().split(" ");
+    expect(words).toHaveLength(25);
+    expect(words.every((word) => top200.words.includes(word))).toBe(true);
+    expect(promptText()).toContain("e of");
+    expect(promptText()).toContain("of the");
   });
 });

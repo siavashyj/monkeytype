@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 
 import english from "../../../../../static/languages/english_1k.json";
+import top200 from "../../../training/data/english-top-200.json";
 import {
   createProfile,
   generateDrill,
@@ -30,22 +31,24 @@ import { TrainingPrompt } from "./TrainingPrompt";
 
 const storageKey = "monkeytype.smartTraining.v1";
 const wordPairsPreferenceKey = "monkeytype.smartTraining.wordPairsEnabled.v1";
+const vocabularyPreferenceKey = "monkeytype.smartTraining.vocabulary.v1";
+type VocabularyMode = "english1k" | "top200";
 const diagnostic =
   "the quick brown fox jumps over the lazy dog then we write each word with care and keep a steady rhythm when learning something new";
-const vocabulary = [
+const fullVocabulary = [
   ...new Set([
     ...english.words.map((word) => word.toLowerCase()),
     ...diagnostic.split(" "),
   ]),
 ];
-const vocabularySet = new Set(vocabulary);
+
 type PracticeTarget = Pick<RankedTarget, "target" | "kind">;
 const sameTarget = (left: PracticeTarget, right: PracticeTarget): boolean =>
   left.target === right.target && left.kind === right.kind;
 const targetLabel = (item: PracticeTarget): string =>
   item.kind === "wordPair" ? item.target : item.target.replaceAll(" ", "␣");
 
-function supportedSequence(target: string): boolean {
+function supportedSequence(target: string, vocabulary: string[]): boolean {
   if (!isSequenceTarget(target)) return false;
   const parts = target.split(" ");
   return parts.every((part, index) =>
@@ -87,6 +90,25 @@ export function TrainingSession(): JSXElement {
       }
     })(),
   );
+  const [vocabularyMode, setVocabularyMode] = createSignal<VocabularyMode>(
+    (() => {
+      try {
+        return localStorage.getItem(vocabularyPreferenceKey) === "top200"
+          ? "top200"
+          : "english1k";
+      } catch {
+        return "english1k";
+      }
+    })(),
+  );
+  const vocabulary = createMemo(() =>
+    vocabularyMode() === "top200" ? top200.words : fullVocabulary,
+  );
+  const supportsTarget = (item: PracticeTarget): boolean =>
+    item.kind === "wordPair"
+      ? isWordPairTarget(item.target) &&
+        item.target.split(" ").every((word) => vocabulary().includes(word))
+      : supportedSequence(item.target, vocabulary());
   const [selected, setSelected] = createSignal<PracticeTarget[]>([]);
   const [manual, setManual] = createSignal("");
   const [count, setCount] = createSignal(25);
@@ -119,7 +141,9 @@ export function TrainingSession(): JSXElement {
   let lastPosition = -1;
   const ranked = createMemo(() =>
     rankTargets(profile()).filter(
-      (target) => wordPairsEnabled() || target.kind !== "wordPair",
+      (target) =>
+        (wordPairsEnabled() || target.kind !== "wordPair") &&
+        supportsTarget(target),
     ),
   );
   const recommended = (limit: number): ReturnType<typeof rankTargets> => {
@@ -193,12 +217,36 @@ export function TrainingSession(): JSXElement {
     }
   };
 
+  const changeVocabulary = (value: string): void => {
+    if (running() || (value !== "english1k" && value !== "top200")) return;
+    setVocabularyMode(value);
+    const supported = selected().filter(supportsTarget);
+    setNotice(
+      supported.length < selected().length
+        ? "Removed targets that are unavailable in this vocabulary."
+        : "",
+    );
+    setSelected(supported);
+    setManual("");
+    setResult(undefined);
+    try {
+      localStorage.setItem(vocabularyPreferenceKey, value);
+      setStorageNotice("");
+    } catch {
+      setStorageNotice(
+        "Could not save this preference. It lasts until you leave the page.",
+      );
+    }
+  };
+
   const start = (): void => {
     const chosen = mode() === "diagnostic" ? [] : targets();
     const words =
       mode() === "diagnostic"
-        ? diagnostic.split(" ")
-        : generateDrill(vocabulary, chosen, count());
+        ? vocabularyMode() === "top200"
+          ? top200.words.filter((_, index) => index % 8 === 0)
+          : diagnostic.split(" ")
+        : generateDrill(vocabulary(), chosen, count());
     setText(words.join(" "));
     trackWordPairs = createWordPairTracker(words.join(" "));
     setDrillTargets(chosen);
@@ -233,6 +281,7 @@ export function TrainingSession(): JSXElement {
       accuracy: accuracy() / 100,
       targets: drillTargets().map((item) => item.target),
       kind: mode(),
+      vocabulary: vocabularyMode(),
       characters: text().length,
       durationMs,
     };
@@ -346,7 +395,7 @@ export function TrainingSession(): JSXElement {
   };
 
   const choose = (target: PracticeTarget): void => {
-    if (running()) return;
+    if (running() || !supportsTarget(target)) return;
     setMode("manual");
     setResult(undefined);
     setSelected((values) =>
@@ -360,12 +409,12 @@ export function TrainingSession(): JSXElement {
     event.preventDefault();
     // Keep boundary spaces in short sequences; ␣ also makes them easy to enter.
     const raw = manual().toLowerCase().replaceAll("␣", " ");
-    const sequence = supportedSequence(raw);
+    const sequence = supportedSequence(raw, vocabulary());
     const target = sequence ? raw : raw.trim().replace(/\s+/g, " ");
-    const validSequence = sequence || supportedSequence(target);
+    const validSequence = sequence || supportedSequence(target, vocabulary());
     const validPhrase =
       isWordPairTarget(target) &&
-      target.split(" ").every((word) => vocabularySet.has(word));
+      target.split(" ").every((word) => vocabulary().includes(word));
     if (!validSequence && validPhrase && !wordPairsEnabled()) {
       setNotice("Turn on word combinations to add a word pair.");
       return;
@@ -422,6 +471,19 @@ export function TrainingSession(): JSXElement {
             )}
           </For>
         </div>
+        <label class="flex items-center gap-2 text-sm text-text">
+          vocabulary
+          <select
+            aria-label="Training vocabulary"
+            value={vocabularyMode()}
+            disabled={running()}
+            onChange={(event) => changeVocabulary(event.currentTarget.value)}
+            class="rounded bg-bg p-2 text-text disabled:opacity-50"
+          >
+            <option value="english1k">English 1k</option>
+            <option value="top200">Top 200 English words</option>
+          </select>
+        </label>
         <label
           class="flex items-center gap-2 text-sm text-text"
           title="Track and practice whole word pairs. Short sequences containing spaces stay enabled. Change between drills."
@@ -454,6 +516,13 @@ export function TrainingSession(): JSXElement {
         </Show>
       </div>
 
+      <Show when={vocabularyMode() === "top200"}>
+        <p class="text-sm text-sub">
+          All drills use only the 200 most frequent English words containing
+          letters a–z, ranked by wordfreq. Targets outside this set are hidden;
+          saved progress is retained.
+        </p>
+      </Show>
       <section class="grid gap-5" aria-label="Typing drill">
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div class="max-w-2xl">
@@ -474,7 +543,9 @@ export function TrainingSession(): JSXElement {
             </h2>
             <p class="mt-2 text-text">
               {mode() === "diagnostic"
-                ? "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
+                ? vocabularyMode() === "top200"
+                  ? "A repeatable check using only the top 200 English words. Type accurately at a comfortable pace."
+                  : "A short, repeatable check across the alphabet. Type accurately at a comfortable pace."
                 : mode() === "manual"
                   ? wordPairsEnabled()
                     ? "Choose up to three keys, character sequences, or word pairs below. Your drill mixes focused words and phrases with everyday words."
@@ -675,7 +746,11 @@ export function TrainingSession(): JSXElement {
                       return (
                         <button
                           type="button"
-                          disabled={running()}
+                          disabled={
+                            running() ||
+                            (vocabularyMode() === "top200" &&
+                              !supportedSequence(key, vocabulary()))
+                          }
                           aria-pressed={
                             selected().some(
                               (item) =>
@@ -846,7 +921,8 @@ export function TrainingSession(): JSXElement {
         <div class="flex flex-wrap justify-between gap-3">
           <h2 class="text-lg">recent sessions</h2>
           <span class="text-sm text-sub">
-            Repeat the diagnostic to compare the same text.
+            Repeat the diagnostic with the same vocabulary to compare the same
+            text.
           </span>
         </div>
         <Show
@@ -877,6 +953,11 @@ export function TrainingSession(): JSXElement {
                     <tr class="border-t border-sub-alt">
                       <td class="p-3">
                         {item.kind}
+                        <span class="block text-sub">
+                          {item.vocabulary === "top200"
+                            ? "top 200"
+                            : "English 1k"}
+                        </span>
                         <span class="block text-sub">
                           {new Date(item.date).toLocaleString()}
                         </span>

@@ -48,7 +48,7 @@ archive (`wordfreq-3.1.1.tar.gz`) was downloaded from PyPI and its bundled
 ## Generated table and reproduction
 
 The derived sequence table is distributed under CC BY-SA 4.0. It contains
-3,136 sequences supported by the English 1k vocabulary and diagnostic, with
+3,170 sequences supported by the English 1k vocabulary, top-200 vocabulary, and diagnostic, with
 exposure and length-specific maxima computed from all 47,973 ASCII alphabetic
 words among the source's top 50,000 entries. This filtering and aggregation are
 modifications to the original word-frequency data. Unknown sequences use the
@@ -65,3 +65,15 @@ python scripts/generate-training-frequency.py frontend/static/languages/english_
 The script verifies the installed wordfreq version. Update its explicit diagnostic
 word list if the diagnostic changes, and regenerate when the training vocabulary
 changes. The table uses six decimal places and deterministic ordering.
+
+## Top-200 practice vocabulary
+
+`frontend/src/ts/training/data/english-top-200.json` retains the first 200 lowercase ASCII alphabetic entries in the same pinned wordfreq English `large` ranking. Filtering excludes digits, punctuation, and contractions before taking 200 entries; ties preserve source order. This derived vocabulary is distributed under CC BY-SA 4.0 with the same source attribution and license files listed above.
+
+Regenerate with:
+
+```sh
+python scripts/generate-training-top-200.py frontend/src/ts/training/data/english-top-200.json
+```
+
+Both maintenance generators require `wordfreq==3.1.1`. No corpus access occurs in the browser.

@@ -28,6 +28,7 @@ WORDLIST = "large"
 REQUESTED_WORDS = 50_000
 MAX_SUBSTRING_LENGTH = 4
 PER_MILLION = 1_000_000
+TOP200_WORD_COUNT = 200
 
 # Keep this in sync with the diagnostic drill in TrainingPage.tsx.  Explicit
 # words make the target vocabulary reproducible without parsing TypeScript.
@@ -125,11 +126,12 @@ def build_dataset(vocabulary_path: Path) -> dict[str, object]:
             f"{PACKAGE}=={VERSION} is required; installed {installed_version(PACKAGE)!r}"
         )
 
-    vocabulary_words = _load_vocabulary(vocabulary_path)
-    targets = _target_substrings(vocabulary_words)
-
     corpus_words = top_n_list(LANGUAGE, REQUESTED_WORDS, wordlist=WORDLIST)
     alphabetic_words = [word for word in corpus_words if _is_ascii_lowercase_word(word)]
+    vocabulary_words = _load_vocabulary(vocabulary_path)
+    targets = _target_substrings(
+        (*vocabulary_words, *alphabetic_words[:TOP200_WORD_COUNT])
+    )
     word_frequencies = (
         (word, word_frequency(word, LANGUAGE, wordlist=WORDLIST))
         for word in alphabetic_words
@@ -142,7 +144,8 @@ def build_dataset(vocabulary_path: Path) -> dict[str, object]:
     }
     retained: dict[str, float] = {}
     all_targets = sorted(
-        target for targets_for_length in targets.values() for target in targets_for_length
+        (target for targets_for_length in targets.values() for target in targets_for_length),
+        key=lambda target: (len(target), target),
     )
     for target in all_targets:
         retained[target] = round(
